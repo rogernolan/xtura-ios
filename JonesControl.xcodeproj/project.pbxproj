@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		C85D00012EF16316008A11D8 /* AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = C85D00002EF16316008A11D8 /* AppIcon.icon */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		C85CFB172EF16316008A11D8 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -27,6 +31,7 @@
 		C85CFB052EF16314008A11D8 /* JonesControl.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = JonesControl.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C85CFB162EF16316008A11D8 /* JonesControlTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = JonesControlTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		C85CFB202EF16316008A11D8 /* JonesControlUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = JonesControlUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		C85D00002EF16316008A11D8 /* AppIcon.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = AppIcon.icon; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -88,6 +93,7 @@
 		C85CFAFC2EF16314008A11D8 = {
 			isa = PBXGroup;
 			children = (
+				C85D00002EF16316008A11D8 /* AppIcon.icon */,
 				C85CFB072EF16314008A11D8 /* JonesControl */,
 				C85CFB192EF16316008A11D8 /* JonesControlTests */,
 				C85CFB232EF16316008A11D8 /* JonesControlUITests */,
@@ -225,6 +231,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C85D00012EF16316008A11D8 /* AppIcon.icon in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
