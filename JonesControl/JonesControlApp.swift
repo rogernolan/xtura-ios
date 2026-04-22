@@ -8,6 +8,7 @@
 import SwiftUI
 
 @main
+@MainActor
 struct JonesControlApp: App {
     var body: some Scene {
         WindowGroup {
