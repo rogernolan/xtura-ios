@@ -4,23 +4,49 @@ struct HeatingView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(HeatingServiceSettings.self) private var heatingServiceSettings
     @State private var model = HeatingFeatureModel()
+    @State private var selectedRuntimeMode = HeatingRuntimeControlMode.schedule
+    @State private var manualTargetCelsius = HeatingFeatureModel.defaultManualTargetCelsius
+    @State private var isSyncingRuntimeModeControls = false
+    @State private var suppressNextRuntimeModeSelectionChange = false
 
     var body: some View {
         NavigationStack {
             content
-                .navigationTitle("Heating")
-                .task(id: reloadTrigger) {
-                    guard scenePhase == .active else {
-                        return
-                    }
+        }
+        .navigationTitle("Heating")
+        .task(id: reloadTrigger) {
+            guard scenePhase == .active else {
+                return
+            }
 
-                    await model.load()
-                }
-                .alert("Heating", isPresented: alertMessageIsPresented) {
-                    Button("OK", role: .cancel) { }
-                } message: {
-                    Text(model.alertMessage ?? "")
-                }
+            await model.load()
+        }
+        .onAppear(perform: syncRuntimeModeControls)
+        .onChange(of: model.runtimeModeDocument, initial: false) { _, _ in
+            syncRuntimeModeControls()
+        }
+        .onChange(of: selectedRuntimeMode, initial: false) { oldValue, newValue in
+            guard oldValue != newValue else {
+                return
+            }
+
+            if suppressNextRuntimeModeSelectionChange {
+                suppressNextRuntimeModeSelectionChange = false
+                return
+            }
+
+            guard !isSyncingRuntimeModeControls else {
+                return
+            }
+
+            Task { @MainActor in
+                await applyRuntimeModeSelection(newValue)
+            }
+        }
+        .alert("Heating", isPresented: alertMessageIsPresented) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(model.alertMessage ?? "")
         }
     }
 
@@ -80,18 +106,55 @@ struct HeatingView: View {
                     Text(model.runtimeModeText)
                 }
 
-                HStack {
-                    Button("Resume Schedule") {
-                        Task { @MainActor in await setRuntimeModeSchedule() }
+                Picker("Mode", selection: $selectedRuntimeMode) {
+                    ForEach(HeatingRuntimeControlMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
                     }
-                    .disabled(!model.canControlRuntimeMode)
+                }
+                .pickerStyle(.segmented)
+                .disabled(!model.canControlRuntimeMode || model.isChangingRuntimeMode)
 
-                    Spacer()
+                if selectedRuntimeMode == .manual {
+                    VStack(alignment: .leading, spacing: 10) {
+                        LabeledContent("Target") {
+                            Text(temperatureLabel(for: manualTargetCelsius))
+                                .monospacedDigit()
+                        }
 
-                    Button("Manual Off") {
-                        Task { @MainActor in await setRuntimeModeOff() }
+                        Stepper(
+                            value: $manualTargetCelsius,
+                            in: 5...30,
+                            step: 0.5
+                        ) {
+                            Text("Adjust manual target")
+                        }
+                        .disabled(!model.canControlRuntimeMode || model.isChangingRuntimeMode)
+
+                        if model.runtimeModeControlSelection == .manual {
+                            Button("Apply Manual Target") {
+                                Task { @MainActor in
+                                    await applyManualTarget()
+                                }
+                            }
+                            .disabled(!model.canControlRuntimeMode || model.isChangingRuntimeMode || manualTargetMatchesCurrentMode)
+                        }
                     }
-                    .disabled(!model.canControlRuntimeMode)
+                }
+
+                if model.isChangingRuntimeMode {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Updating runtime mode...")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if model.runtimeModeDocument?.mode == .boost {
+                    Text("Boost is currently active. Moving the switch will replace the boost mode.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
             }
 
@@ -169,8 +232,22 @@ struct HeatingView: View {
             try await model.setRuntimeModeSchedule()
         } catch let error as HeatingFeatureModelError {
             model.alertMessage = HeatingFeatureModel.message(for: error)
+            syncRuntimeModeControls()
         } catch {
             model.alertMessage = error.localizedDescription
+            syncRuntimeModeControls()
+        }
+    }
+
+    private func setRuntimeModeManual(targetCelsius: Double) async {
+        do {
+            try await model.setRuntimeModeManual(targetCelsius: targetCelsius)
+        } catch let error as HeatingFeatureModelError {
+            model.alertMessage = HeatingFeatureModel.message(for: error)
+            syncRuntimeModeControls()
+        } catch {
+            model.alertMessage = error.localizedDescription
+            syncRuntimeModeControls()
         }
     }
 
@@ -179,9 +256,49 @@ struct HeatingView: View {
             try await model.setRuntimeModeOff()
         } catch let error as HeatingFeatureModelError {
             model.alertMessage = HeatingFeatureModel.message(for: error)
+            syncRuntimeModeControls()
         } catch {
             model.alertMessage = error.localizedDescription
+            syncRuntimeModeControls()
         }
+    }
+
+    private func syncRuntimeModeControls() {
+        isSyncingRuntimeModeControls = true
+        let syncedSelection = model.runtimeModeControlSelection
+        if selectedRuntimeMode != syncedSelection {
+            suppressNextRuntimeModeSelectionChange = true
+            selectedRuntimeMode = syncedSelection
+        }
+        manualTargetCelsius = model.effectiveManualTargetCelsius
+        isSyncingRuntimeModeControls = false
+    }
+
+    private func applyRuntimeModeSelection(_ selection: HeatingRuntimeControlMode) async {
+        switch selection {
+        case .schedule:
+            await setRuntimeModeSchedule()
+        case .manual:
+            await setRuntimeModeManual(targetCelsius: manualTargetCelsius)
+        case .off:
+            await setRuntimeModeOff()
+        }
+    }
+
+    private func applyManualTarget() async {
+        await setRuntimeModeManual(targetCelsius: manualTargetCelsius)
+    }
+
+    private var manualTargetMatchesCurrentMode: Bool {
+        guard model.runtimeModeDocument?.mode == .manual else {
+            return false
+        }
+
+        return abs(model.effectiveManualTargetCelsius - manualTargetCelsius) < 0.05
+    }
+
+    private func temperatureLabel(for temperature: Double) -> String {
+        HeatingFeatureModel.formatTemperature(temperature) + "°C"
     }
 }
 

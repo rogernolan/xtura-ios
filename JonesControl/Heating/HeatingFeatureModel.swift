@@ -4,6 +4,8 @@ import Observation
 @MainActor
 @Observable
 final class HeatingFeatureModel {
+    static let defaultManualTargetCelsius = 19.0
+
     enum ServiceState: Equatable {
         case loading
         case notConfigured
@@ -31,11 +33,15 @@ final class HeatingFeatureModel {
     @ObservationIgnored
     private let baseURLProvider: @MainActor () -> URL?
 
+    @ObservationIgnored
+    private var pendingRuntimeModeRequest: HeatingRuntimeModeRequest?
+
     var serviceState: ServiceState = .loading
     var schedule: HeatingSchedule?
     var linkedDocument: HeatingLinkedScheduleDocument?
     var runtimeModeDocument: HeatingRuntimeModeDocument?
     var alertMessage: String?
+    var isChangingRuntimeMode = false
 
     var canEditSchedule: Bool {
         serviceState == .ready
@@ -92,6 +98,21 @@ final class HeatingFeatureModel {
 
             return "Boost"
         }
+    }
+
+    var runtimeModeControlSelection: HeatingRuntimeControlMode {
+        switch runtimeModeDocument?.mode {
+        case .manual:
+            return .manual
+        case .off:
+            return .off
+        case .boost, .schedule, .none:
+            return .schedule
+        }
+    }
+
+    var effectiveManualTargetCelsius: Double {
+        runtimeModeDocument?.manualTargetCelsius ?? Self.defaultManualTargetCelsius
     }
 
     init(
@@ -173,27 +194,53 @@ final class HeatingFeatureModel {
     }
 
     func setRuntimeModeSchedule() async throws {
-        let service = try makeLoadedService()
+        try await enqueueRuntimeModeRequest(.schedule)
+    }
 
-        do {
-            let modeDocument = try await service.setHeatingModeSchedule()
-            runtimeModeDocument = modeDocument
-        } catch let error as HeatingServiceError {
-            let state = Self.serviceState(for: error, baseURL: linkedDocumentBaseURL())
-            serviceState = state
-            throw HeatingFeatureModelError.unavailable(message: state.message)
-        }
+    func setRuntimeModeManual(targetCelsius: Double) async throws {
+        try await enqueueRuntimeModeRequest(.manual(targetCelsius: targetCelsius))
     }
 
     func setRuntimeModeOff() async throws {
-        let service = try makeLoadedService()
+        try await enqueueRuntimeModeRequest(.off)
+    }
 
+    private func enqueueRuntimeModeRequest(_ request: HeatingRuntimeModeRequest) async throws {
+        pendingRuntimeModeRequest = request
+
+        guard !isChangingRuntimeMode else {
+            return
+        }
+
+        let service = try makeLoadedService()
+        isChangingRuntimeMode = true
+        defer { isChangingRuntimeMode = false }
+
+        while let nextRequest = pendingRuntimeModeRequest {
+            pendingRuntimeModeRequest = nil
+            try await applyRuntimeModeRequest(nextRequest, service: service)
+        }
+    }
+
+    private func applyRuntimeModeRequest(
+        _ request: HeatingRuntimeModeRequest,
+        service: any HeatingServicing
+    ) async throws {
         do {
-            let modeDocument = try await service.setHeatingModeOff()
+            let modeDocument: HeatingRuntimeModeDocument
+            switch request {
+            case .schedule:
+                modeDocument = try await service.setHeatingModeSchedule()
+            case .manual(let targetCelsius):
+                modeDocument = try await service.setHeatingModeManual(targetCelsius: targetCelsius)
+            case .off:
+                modeDocument = try await service.setHeatingModeOff()
+            }
             runtimeModeDocument = modeDocument
         } catch let error as HeatingServiceError {
             let state = Self.serviceState(for: error, baseURL: linkedDocumentBaseURL())
             serviceState = state
+            pendingRuntimeModeRequest = nil
             throw HeatingFeatureModelError.unavailable(message: state.message)
         }
     }
@@ -317,7 +364,7 @@ final class HeatingFeatureModel {
         }
     }
 
-    private static func formatTemperature(_ temperature: Double) -> String {
+    static func formatTemperature(_ temperature: Double) -> String {
         if temperature.rounded(.towardZero) == temperature {
             return String(format: "%.0f", temperature)
         }
@@ -333,4 +380,29 @@ enum HeatingFeatureModelError: Error, Equatable, Sendable {
     case unsupportedShape(message: String)
     case validationFailed([String])
     case conflict(message: String)
+}
+
+enum HeatingRuntimeControlMode: String, CaseIterable, Equatable, Identifiable, Sendable {
+    case schedule
+    case manual
+    case off
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .schedule:
+            return "Schedule"
+        case .manual:
+            return "Manual"
+        case .off:
+            return "Off"
+        }
+    }
+}
+
+enum HeatingRuntimeModeRequest: Equatable, Sendable {
+    case schedule
+    case manual(targetCelsius: Double)
+    case off
 }

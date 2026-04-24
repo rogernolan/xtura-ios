@@ -113,10 +113,61 @@ struct HeatingServiceTests {
         }
     }
 
+    @Test func serviceSendsManualModeTargetInRequestBody() async throws {
+        let protocolClass = HeatingServiceManualModeURLProtocol.self
+        protocolClass.reset()
+
+        let session = makeSession(protocolClass: protocolClass)
+        let service = try HeatingService(baseURLString: "http://example.com", session: session)
+
+        let response = try await service.setHeatingModeManual(targetCelsius: 19.5)
+
+        #expect(response.mode == .manual)
+        #expect(response.manualTargetCelsius == 19.5)
+        #expect(protocolClass.lastRequest?.httpMethod == "POST")
+        #expect(protocolClass.lastRequest?.url?.path == "/v1/heating/mode/manual")
+
+        let request = try #require(protocolClass.lastRequest)
+        let requestData = try #require(request.bodyData)
+        let body = try JSONDecoder().decode(HeatingModeManualRequest.self, from: requestData)
+        #expect(body.targetCelsius == 19.5)
+    }
+
     private func makeSession(protocolClass: URLProtocol.Type) -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [protocolClass]
         return URLSession(configuration: configuration)
+    }
+}
+
+private extension URLRequest {
+    var bodyData: Data? {
+        if let httpBody {
+            return httpBody
+        }
+
+        guard let stream = httpBodyStream else {
+            return nil
+        }
+
+        stream.open()
+        defer { stream.close() }
+
+        var data = Data()
+        let bufferSize = 1024
+        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)
+        defer { buffer.deallocate() }
+
+        while stream.hasBytesAvailable {
+            let count = stream.read(buffer, maxLength: bufferSize)
+            guard count > 0 else {
+                break
+            }
+
+            data.append(buffer, count: count)
+        }
+
+        return data.isEmpty ? nil : data
     }
 }
 
@@ -179,5 +230,29 @@ private final class HeatingServiceValidationURLProtocol: FixedResponseURLProtoco
 private final class HeatingServiceTransportURLProtocol: FixedResponseURLProtocol {
     override func startLoading() {
         fail(with: URLError(.cannotConnectToHost))
+    }
+}
+
+private final class HeatingServiceManualModeURLProtocol: FixedResponseURLProtocol {
+    static var lastRequest: URLRequest?
+
+    static func reset() {
+        lastRequest = nil
+    }
+
+    override func startLoading() {
+        Self.lastRequest = request
+        send(
+            statusCode: 200,
+            data: Data(
+                """
+                {
+                  "mode": "manual",
+                  "manual_target_celsius": 19.5,
+                  "updated_at": "2026-04-24T08:32:00Z"
+                }
+                """.utf8
+            )
+        )
     }
 }

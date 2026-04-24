@@ -5,6 +5,7 @@ protocol HeatingServicing {
     func saveHeatingSchedule(_ document: HeatingScheduleDocument) async throws -> HeatingScheduleDocument
     func fetchHeatingMode() async throws -> HeatingRuntimeModeDocument
     func setHeatingModeSchedule() async throws -> HeatingRuntimeModeDocument
+    func setHeatingModeManual(targetCelsius: Double) async throws -> HeatingRuntimeModeDocument
     func setHeatingModeOff() async throws -> HeatingRuntimeModeDocument
 }
 
@@ -52,6 +53,15 @@ struct HeatingService {
         try await sendRequest(
             path: "/v1/heating/mode/schedule",
             method: "POST",
+            responseType: HeatingRuntimeModeDocument.self
+        )
+    }
+
+    func setHeatingModeManual(targetCelsius: Double) async throws -> HeatingRuntimeModeDocument {
+        try await sendRequest(
+            path: "/v1/heating/mode/manual",
+            method: "POST",
+            body: HeatingModeManualRequest(targetCelsius: targetCelsius),
             responseType: HeatingRuntimeModeDocument.self
         )
     }

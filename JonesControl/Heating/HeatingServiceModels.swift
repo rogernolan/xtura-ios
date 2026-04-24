@@ -90,6 +90,14 @@ struct HeatingRuntimeBoostDocument: Codable, Equatable, Sendable {
 
 struct HeatingModeScheduleRequest: Codable, Equatable, Sendable {}
 
+struct HeatingModeManualRequest: Codable, Equatable, Sendable {
+    var targetCelsius: Double
+
+    enum CodingKeys: String, CodingKey {
+        case targetCelsius = "target_celsius"
+    }
+}
+
 struct HeatingModeOffRequest: Codable, Equatable, Sendable {}
 
 struct HeatingValidationFailureDocument: Codable, Equatable, Sendable {

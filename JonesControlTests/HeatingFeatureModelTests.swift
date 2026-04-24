@@ -393,6 +393,14 @@ struct HeatingFeatureModelTests {
                     updatedAt: "2026-04-22T10:30:00Z"
                 )
             },
+            setModeManual: { targetCelsius in
+                HeatingRuntimeModeDocument(
+                    mode: .manual,
+                    manualTargetCelsius: targetCelsius,
+                    boost: nil,
+                    updatedAt: "2026-04-22T10:30:30Z"
+                )
+            },
             setModeOff: {
                 HeatingRuntimeModeDocument(
                     mode: .off,
@@ -412,9 +420,133 @@ struct HeatingFeatureModelTests {
         #expect(service.setHeatingModeOffCallCount == 1)
         #expect(model.runtimeModeDocument?.mode == .off)
 
+        try await model.setRuntimeModeManual(targetCelsius: 19.5)
+        #expect(service.setHeatingModeManualCallCount == 1)
+        #expect(service.lastManualTargetCelsius == 19.5)
+        #expect(model.runtimeModeDocument?.mode == .manual)
+        #expect(model.runtimeModeDocument?.manualTargetCelsius == 19.5)
+
         try await model.setRuntimeModeSchedule()
         #expect(service.setHeatingModeScheduleCallCount == 1)
         #expect(model.runtimeModeDocument?.mode == .schedule)
+    }
+
+    @Test func runtimeModeCoalescesQueuedChangesWhileARequestIsInFlight() async throws {
+        let pendingOff = PendingRuntimeModeResponse()
+        let service = HeatingServiceStub(
+            fetchSchedule: {
+                HeatingScheduleDocument(
+                    timezone: "Europe/London",
+                    programs: [
+                        HeatingScheduleProgram(
+                            id: "everyday-default",
+                            enabled: true,
+                            days: HeatingScheduleWeekday.allDays,
+                            periods: [
+                                HeatingSchedulePeriod(start: "00:00", mode: .off)
+                            ]
+                        )
+                    ],
+                    revision: "rev-1"
+                )
+            },
+            fetchMode: {
+                HeatingRuntimeModeDocument(
+                    mode: .schedule,
+                    manualTargetCelsius: nil,
+                    boost: nil,
+                    updatedAt: "2026-04-22T10:20:00Z"
+                )
+            },
+            setModeSchedule: {
+                HeatingRuntimeModeDocument(
+                    mode: .schedule,
+                    manualTargetCelsius: nil,
+                    boost: nil,
+                    updatedAt: "2026-04-22T10:31:00Z"
+                )
+            },
+            setModeManual: { targetCelsius in
+                HeatingRuntimeModeDocument(
+                    mode: .manual,
+                    manualTargetCelsius: targetCelsius,
+                    boost: nil,
+                    updatedAt: "2026-04-22T10:30:30Z"
+                )
+            },
+            setModeOff: {
+                try await pendingOff.waitForResponse()
+            }
+        )
+        let model = HeatingFeatureModel(
+            baseURLProvider: { URL(string: "http://example.com") },
+            makeService: { _ in service }
+        )
+
+        await model.load()
+
+        let offTask = Task {
+            try await model.setRuntimeModeOff()
+        }
+
+        await pendingOff.waitUntilRequested()
+        #expect(model.isChangingRuntimeMode)
+
+        try await model.setRuntimeModeManual(targetCelsius: 18.5)
+        try await model.setRuntimeModeSchedule()
+
+        #expect(service.setHeatingModeOffCallCount == 1)
+        #expect(service.setHeatingModeManualCallCount == 0)
+        #expect(service.setHeatingModeScheduleCallCount == 0)
+
+        await pendingOff.resume(
+            with: HeatingRuntimeModeDocument(
+                mode: .off,
+                manualTargetCelsius: nil,
+                boost: nil,
+                updatedAt: "2026-04-22T10:30:00Z"
+            )
+        )
+
+        try await offTask.value
+
+        #expect(service.setHeatingModeOffCallCount == 1)
+        #expect(service.setHeatingModeManualCallCount == 0)
+        #expect(service.setHeatingModeScheduleCallCount == 1)
+        #expect(model.runtimeModeDocument?.mode == .schedule)
+        #expect(model.isChangingRuntimeMode == false)
+    }
+}
+
+actor PendingRuntimeModeResponse {
+    private var started = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var continuation: CheckedContinuation<HeatingRuntimeModeDocument, Error>?
+
+    func waitUntilRequested() async {
+        if started {
+            return
+        }
+
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func waitForResponse() async throws -> HeatingRuntimeModeDocument {
+        started = true
+        let waiters = waiters
+        self.waiters.removeAll()
+        waiters.forEach { $0.resume() }
+
+        return try await withCheckedThrowingContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func resume(with document: HeatingRuntimeModeDocument) {
+        continuation?.resume(returning: document)
+        continuation = nil
     }
 }
 
@@ -423,13 +555,16 @@ private final class HeatingServiceStub: HeatingServicing {
     var fetchModeHandler: () async throws -> HeatingRuntimeModeDocument
     var saveScheduleHandler: (HeatingScheduleDocument) async throws -> HeatingScheduleDocument
     var setModeScheduleHandler: () async throws -> HeatingRuntimeModeDocument
+    var setModeManualHandler: (Double) async throws -> HeatingRuntimeModeDocument
     var setModeOffHandler: () async throws -> HeatingRuntimeModeDocument
 
     private(set) var fetchHeatingScheduleCallCount = 0
     private(set) var fetchHeatingModeCallCount = 0
     private(set) var saveHeatingScheduleCallCount = 0
     private(set) var setHeatingModeScheduleCallCount = 0
+    private(set) var setHeatingModeManualCallCount = 0
     private(set) var setHeatingModeOffCallCount = 0
+    private(set) var lastManualTargetCelsius: Double?
     private(set) var savedDocuments: [HeatingScheduleDocument] = []
 
     init(
@@ -441,6 +576,9 @@ private final class HeatingServiceStub: HeatingServicing {
         setModeSchedule: @escaping () async throws -> HeatingRuntimeModeDocument = {
             HeatingRuntimeModeDocument(mode: .schedule, manualTargetCelsius: nil, boost: nil, updatedAt: "")
         },
+        setModeManual: @escaping (Double) async throws -> HeatingRuntimeModeDocument = { targetCelsius in
+            HeatingRuntimeModeDocument(mode: .manual, manualTargetCelsius: targetCelsius, boost: nil, updatedAt: "")
+        },
         setModeOff: @escaping () async throws -> HeatingRuntimeModeDocument = {
             HeatingRuntimeModeDocument(mode: .off, manualTargetCelsius: nil, boost: nil, updatedAt: "")
         }
@@ -449,6 +587,7 @@ private final class HeatingServiceStub: HeatingServicing {
         self.fetchModeHandler = fetchMode
         self.saveScheduleHandler = saveSchedule
         self.setModeScheduleHandler = setModeSchedule
+        self.setModeManualHandler = setModeManual
         self.setModeOffHandler = setModeOff
     }
 
@@ -471,6 +610,12 @@ private final class HeatingServiceStub: HeatingServicing {
     func setHeatingModeSchedule() async throws -> HeatingRuntimeModeDocument {
         setHeatingModeScheduleCallCount += 1
         return try await setModeScheduleHandler()
+    }
+
+    func setHeatingModeManual(targetCelsius: Double) async throws -> HeatingRuntimeModeDocument {
+        setHeatingModeManualCallCount += 1
+        lastManualTargetCelsius = targetCelsius
+        return try await setModeManualHandler(targetCelsius)
     }
 
     func setHeatingModeOff() async throws -> HeatingRuntimeModeDocument {
