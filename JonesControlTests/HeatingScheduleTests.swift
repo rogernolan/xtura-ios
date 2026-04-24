@@ -386,6 +386,192 @@ struct HeatingScheduleTests {
             targetTemperatureText: "18°C"
         ))
     }
+
+    @Test func linkedDocumentMappingImportsOneAllDaysProgramAndPreservesMetadata() throws {
+        let document = HeatingScheduleDocument(
+            timezone: "Europe/London",
+            programs: [
+                HeatingScheduleProgram(
+                    id: "everyday-default",
+                    enabled: true,
+                    days: HeatingScheduleWeekday.allDays,
+                    periods: [
+                        HeatingSchedulePeriod(start: "00:00", mode: .off),
+                        HeatingSchedulePeriod(start: "05:30", mode: .heat, targetCelsius: 20),
+                        HeatingSchedulePeriod(start: "08:00", mode: .off)
+                    ]
+                )
+            ],
+            revision: "2026-04-22T09:31:45.123456Z"
+        )
+
+        let linkedDocument = try HeatingSchedule.linkedDocument(from: document)
+
+        #expect(linkedDocument.timezone == "Europe/London")
+        #expect(linkedDocument.revision == "2026-04-22T09:31:45.123456Z")
+        #expect(linkedDocument.programID == "everyday-default")
+        #expect(linkedDocument.schedule.activeSlots == [
+            HeatingScheduleSlot(
+                startMinuteOfDay: 0,
+                endMinuteOfDay: 5 * 60 + 30,
+                mode: .off
+            ),
+            HeatingScheduleSlot(
+                startMinuteOfDay: 5 * 60 + 30,
+                endMinuteOfDay: 8 * 60,
+                mode: .heat,
+                targetTemperatureCelsius: 20
+            ),
+            HeatingScheduleSlot(
+                startMinuteOfDay: 8 * 60,
+                endMinuteOfDay: 8 * 60 + 15,
+                mode: .off
+            ),
+            HeatingScheduleSlot(
+                startMinuteOfDay: 8 * 60 + 15,
+                endMinuteOfDay: HeatingSchedule.minutesInDay,
+                mode: .off
+            )
+        ])
+    }
+
+    @Test func linkedScheduleExportsBackToOneEnabledAllDaysProgram() throws {
+        let schedule = HeatingSchedule(activeSlots: [
+            HeatingScheduleSlot(
+                startMinuteOfDay: 0,
+                endMinuteOfDay: 5 * 60 + 30,
+                mode: .off
+            ),
+            HeatingScheduleSlot(
+                startMinuteOfDay: 5 * 60 + 30,
+                endMinuteOfDay: 8 * 60,
+                mode: .heat,
+                targetTemperatureCelsius: 20
+            ),
+            HeatingScheduleSlot(
+                startMinuteOfDay: 8 * 60,
+                endMinuteOfDay: 8 * 60 + 15,
+                mode: .off
+            ),
+            HeatingScheduleSlot(
+                startMinuteOfDay: 8 * 60 + 15,
+                endMinuteOfDay: HeatingSchedule.minutesInDay,
+                mode: .off
+            )
+        ])!
+
+        let document = try schedule.serverDocument(
+            timezone: "Europe/London",
+            revision: "rev-1",
+            programID: "everyday-default"
+        )
+
+        #expect(document == HeatingScheduleDocument(
+            timezone: "Europe/London",
+            programs: [
+                HeatingScheduleProgram(
+                    id: "everyday-default",
+                    enabled: true,
+                    days: HeatingScheduleWeekday.allDays,
+                    periods: [
+                        HeatingSchedulePeriod(start: "00:00", mode: .off),
+                        HeatingSchedulePeriod(start: "05:30", mode: .heat, targetCelsius: 20),
+                        HeatingSchedulePeriod(start: "08:00", mode: .off)
+                    ]
+                )
+            ],
+            revision: "rev-1"
+        ))
+    }
+
+    @Test func linkedDocumentMappingRejectsUnsupportedServerShapes() throws {
+        let multiplePrograms = HeatingScheduleDocument(
+            timezone: "Europe/London",
+            programs: [
+                HeatingScheduleProgram(
+                    id: "weekday",
+                    enabled: true,
+                    days: [.mon, .tue, .wed, .thu, .fri],
+                    periods: [HeatingSchedulePeriod(start: "00:00", mode: .off)]
+                ),
+                HeatingScheduleProgram(
+                    id: "weekend",
+                    enabled: true,
+                    days: [.sat, .sun],
+                    periods: [HeatingSchedulePeriod(start: "00:00", mode: .off)]
+                )
+            ],
+            revision: "rev"
+        )
+        let missingAllDays = HeatingScheduleDocument(
+            timezone: "Europe/London",
+            programs: [
+                HeatingScheduleProgram(
+                    id: "weekday",
+                    enabled: true,
+                    days: [.mon, .tue, .wed, .thu, .fri],
+                    periods: [HeatingSchedulePeriod(start: "00:00", mode: .off)]
+                )
+            ],
+            revision: "rev"
+        )
+        let incompatibleShape = HeatingScheduleDocument(
+            timezone: "Europe/London",
+            programs: [
+                HeatingScheduleProgram(
+                    id: "everyday-default",
+                    enabled: true,
+                    days: HeatingScheduleWeekday.allDays,
+                    periods: [
+                        HeatingSchedulePeriod(start: "00:00", mode: .off),
+                        HeatingSchedulePeriod(start: "00:15", mode: .heat, targetCelsius: 19),
+                        HeatingSchedulePeriod(start: "00:30", mode: .off),
+                        HeatingSchedulePeriod(start: "00:45", mode: .heat, targetCelsius: 20),
+                        HeatingSchedulePeriod(start: "01:00", mode: .off)
+                    ]
+                )
+            ],
+            revision: "rev"
+        )
+        let missingHeatTarget = HeatingScheduleDocument(
+            timezone: "Europe/London",
+            programs: [
+                HeatingScheduleProgram(
+                    id: "everyday-default",
+                    enabled: true,
+                    days: HeatingScheduleWeekday.allDays,
+                    periods: [
+                        HeatingSchedulePeriod(start: "00:00", mode: .off),
+                        HeatingSchedulePeriod(start: "05:30", mode: .heat)
+                    ]
+                )
+            ],
+            revision: "rev"
+        )
+
+        #expect(throws: HeatingScheduleMappingError.programCountUnsupported(2)) {
+            try HeatingSchedule.linkedDocument(from: multiplePrograms)
+        }
+
+        #expect(throws: HeatingScheduleMappingError.programMustBeEnabledAllDays(
+            id: "weekday",
+            days: [.mon, .tue, .wed, .thu, .fri],
+            enabled: true
+        )) {
+            try HeatingSchedule.linkedDocument(from: missingAllDays)
+        }
+
+        #expect(throws: HeatingScheduleMappingError.incompatibleShape(periodCount: 5)) {
+            try HeatingSchedule.linkedDocument(from: incompatibleShape)
+        }
+
+        #expect(throws: HeatingScheduleMappingError.heatPeriodMissingTarget(
+            programID: "everyday-default",
+            start: "05:30"
+        )) {
+            try HeatingSchedule.linkedDocument(from: missingHeatTarget)
+        }
+    }
 }
 
 private func makeSchedule() -> HeatingSchedule {

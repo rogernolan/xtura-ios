@@ -1,16 +1,30 @@
 # Heating Schedule App Mapping
 
-This document describes the app-local heating schedule shape used by `JonesControl` and how it maps toward the external heating API contract.
+This document describes the server-backed heating schedule shape used by `JonesControl`, the in-app linked-slot projection, and how another Codex can consume the service integration safely.
 
-The main API contract is being documented separately in the main repo. This file is intentionally narrower: it explains the app-side model another Codex would need to consume when wiring `JonesControl` into `xtura-automation`.
+The main API contract is documented separately in the main repo at `/Users/rog/Development/xtura-automation/docs/heating-schedule-api.md`. This file is intentionally narrower: it explains the JonesControl-side model and wiring another Codex would need to understand when working on the iOS app.
 
-## Local App Model
+## Source Of Truth
+
+The heating service is the source of truth.
+
+- the app fetches the full server schedule document
+- the app projects that document into a linked four-slot `HeatingSchedule`
+- edits are only allowed when the service URL is configured and the service is reachable
+- the app saves by converting the edited linked schedule back into a full server document and sending it with the last seen `revision`
+- there is no offline editable local fallback
+
+## In-App Projection
 
 The Heating tab uses a local `HeatingSchedule` with exactly four visible slots.
 
 Relevant types live in:
 
 - `/Users/rog/.codex/worktrees/b3bf/JonesControl/JonesControl/Heating/HeatingSchedule.swift`
+- `/Users/rog/.codex/worktrees/b3bf/JonesControl/JonesControl/Heating/HeatingFeatureModel.swift`
+- `/Users/rog/.codex/worktrees/b3bf/JonesControl/JonesControl/Heating/HeatingService.swift`
+- `/Users/rog/.codex/worktrees/b3bf/JonesControl/JonesControl/Heating/HeatingServiceModels.swift`
+- `/Users/rog/.codex/worktrees/b3bf/JonesControl/JonesControl/Heating/HeatingServiceSettings.swift`
 
 Core types:
 
@@ -19,6 +33,9 @@ Core types:
 - `HeatingScheduleSlot`
 - `HeatingScheduleMode`
 - `HeatingScheduleExportPeriod`
+- `HeatingLinkedScheduleDocument`
+- `HeatingFeatureModel`
+- `HeatingServiceSettings`
 
 ### Visible Slots
 
@@ -120,6 +137,14 @@ The nearby backend project expects a day program that:
 
 That aligns closely with `HeatingScheduleExportPeriod`.
 
+JonesControl now has direct mapping helpers in `HeatingSchedule.swift`:
+
+- `HeatingSchedule.linkedDocument(from:)`
+- `HeatingSchedule.init(serverProgram:)`
+- `HeatingSchedule.serverDocument(timezone:revision:programID:)`
+
+Those helpers are the correct integration layer. Do not rebuild this mapping by scraping view text or re-deriving server JSON from UI fields.
+
 The main mapping another Codex would need is:
 
 1. Convert `startMinuteOfDay` into the backend local-time shape.
@@ -151,6 +176,9 @@ Export:
 
 ## Integration Notes
 
-- The current Heating tab is local-only. There is no persistence or network sync yet.
+- `HeatingServiceSettings` stores the service base URL in `UserDefaults` under `heatingServiceBaseURL`.
+- `HeatingFeatureModel` is the app-side coordinator for fetch, save, runtime mode reads, and not-configured/unavailable/unsupported states.
+- Unsupported server shapes are surfaced explicitly instead of guessed.
+  - JonesControl currently supports exactly one enabled program covering all seven days.
 - UI formatting helpers live in `HeatingView` and `HeatingSlotEditorView`; do not scrape display strings for integration.
-- For integration, use `HeatingSchedule` plus `exportedPeriods()`, not the rendered row text.
+- For integration, use `HeatingSchedule`, the mapping helpers in `HeatingSchedule.swift`, and the typed service models, not the rendered row text.

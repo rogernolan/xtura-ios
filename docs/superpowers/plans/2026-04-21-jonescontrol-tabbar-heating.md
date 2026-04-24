@@ -403,3 +403,96 @@ Revised requirements:
 - Modify: `docs/heating-schedule-app-mapping.md`
 
 - [ ] Replace placeholder/empty-slot language with the linked four-slot chain model.
+
+---
+
+## Service And Settings Follow-Up
+
+Heating is no longer local-only. The next phase connects the linked four-slot editor to the real heating service and adds a Settings tab.
+
+Current requirements:
+
+- the server is the source of truth
+- if the service is unreachable, do not allow offline schedule editing
+- Heating edits one synthetic all-days program only
+- Settings stores the service base URL
+- Settings can fetch runtime mode and send:
+  - `Manual Off`
+  - `Resume Schedule`
+
+### Follow-Up Task D: Add Heating Service Client And Document Mapping
+
+**Files:**
+- Create: `JonesControl/Heating/HeatingService.swift`
+- Create: `JonesControl/Heating/HeatingServiceModels.swift`
+- Modify: `JonesControl/Heating/HeatingSchedule.swift`
+- Modify: `JonesControlTests/HeatingScheduleTests.swift`
+- Create: `JonesControlTests/HeatingServiceTests.swift`
+
+- [ ] Add document models for:
+  - schedule document
+  - program
+  - period
+  - runtime mode
+- [ ] Add API client methods for:
+  - `GET /v1/automation/heating-schedule`
+  - `PUT /v1/automation/heating-schedule`
+  - `GET /v1/heating/mode`
+  - `POST /v1/heating/mode/schedule`
+  - `POST /v1/heating/mode/off`
+- [ ] Add mapping between one all-days backend program and the linked four-slot app schedule.
+- [ ] Surface unsupported server schedule shapes instead of guessing how to merge them.
+- [ ] Add tests for document decoding/encoding, schedule mapping, `409` handling, and `400 validation_failed` handling.
+
+### Follow-Up Task E: Add Settings Tab And Service Configuration
+
+**Files:**
+- Modify: `JonesControl/AppShellView.swift`
+- Create: `JonesControl/Settings/SettingsView.swift`
+- Create: `JonesControl/Settings/SettingsStore.swift`
+- Modify: `JonesControlTests/TabBarVisibilityModelTests.swift` only if needed
+
+- [ ] Add a third tab: `Settings`.
+- [ ] Add base URL / host configuration UI.
+- [ ] Persist the configured service URL locally for the app.
+- [ ] Show the current runtime mode in Settings.
+- [ ] Add `Manual Off` and `Resume Schedule` actions.
+- [ ] Show transport/action errors in Settings.
+
+### Follow-Up Task F: Wire Heating To The Real Service
+
+**Files:**
+- Modify: `JonesControl/Heating/HeatingView.swift`
+- Modify: `JonesControl/Heating/HeatingSlotEditorView.swift`
+- Modify: `JonesControl/Heating/HeatingSchedule.swift`
+- Modify: `JonesControlTests/HeatingScheduleTests.swift`
+- Modify: `docs/heating-schedule-app-mapping.md`
+
+- [ ] Load the Heating screen from `GET /v1/automation/heating-schedule`.
+- [ ] Disable editing until a successful server fetch completes.
+- [ ] Keep the last fetched document and `revision` in memory while editing.
+- [ ] Save edits back with full-document `PUT`.
+- [ ] After save success, replace local state with the full response body.
+- [ ] On `409`, refetch and show a retry message.
+- [ ] On `400 validation_failed`, display server validation messages.
+- [ ] On transport failure, keep editing disabled until the server can be reached again.
+- [ ] Update the app-side mapping doc to reflect service-backed editing and runtime mode integration.
+
+### Follow-Up Task G: Final Verification For Service Integration
+
+**Files:**
+- Review modified Heating and Settings files
+- Review docs updates
+
+- [ ] Run focused tests for:
+  - `HeatingScheduleTests`
+  - `HeatingServiceTests`
+  - `TabBarVisibilityModelTests`
+- [ ] Run app build:
+  - `xcodebuild build -project JonesControl.xcodeproj -scheme JonesControl -destination 'generic/platform=iOS Simulator'`
+- [ ] Manually verify:
+  - Heating stays unavailable if the service URL is missing or unreachable
+  - successful fetch enables schedule editing
+  - schedule save hits the configured server URL
+  - `Manual Off` changes runtime mode
+  - `Resume Schedule` changes runtime mode back

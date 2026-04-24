@@ -1,61 +1,188 @@
 import SwiftUI
 
 struct HeatingView: View {
-    @State private var schedule: HeatingSchedule
-
-    init(schedule: HeatingSchedule = Self.makeSeededLocalSchedule()) {
-        self._schedule = State(initialValue: schedule)
-    }
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(HeatingServiceSettings.self) private var heatingServiceSettings
+    @State private var model = HeatingFeatureModel()
 
     var body: some View {
         NavigationStack {
-            List {
-                Section("Schedule") {
+            content
+                .navigationTitle("Heating")
+                .task(id: reloadTrigger) {
+                    guard scenePhase == .active else {
+                        return
+                    }
+
+                    await model.load()
+                }
+                .alert("Heating", isPresented: alertMessageIsPresented) {
+                    Button("OK", role: .cancel) { }
+                } message: {
+                    Text(model.alertMessage ?? "")
+                }
+        }
+    }
+
+    private var reloadTrigger: String {
+        "\(scenePhase == .active)|\(heatingServiceSettings.trimmedBaseURLText)"
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        switch model.serviceState {
+        case .loading:
+            ProgressView("Loading heating schedule...")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(24)
+        case .notConfigured:
+            statusView(
+                title: model.statusTitle,
+                message: model.statusMessage,
+                systemImage: "gearshape",
+                showsRetry: true
+            ) {
+                Task { @MainActor in
+                    await model.load()
+                }
+            }
+            case .unavailable:
+                statusView(
+                    title: model.statusTitle,
+                    message: model.statusMessage,
+                    systemImage: "icloud.slash",
+                    showsRetry: true
+                ) {
+                Task { @MainActor in
+                    await model.load()
+                }
+            }
+            case .unsupportedShape:
+                statusView(
+                    title: model.statusTitle,
+                    message: model.statusMessage,
+                    systemImage: "exclamationmark.triangle",
+                    showsRetry: true
+                ) {
+                Task { @MainActor in
+                    await model.load()
+                }
+            }
+        case .ready:
+            scheduleView
+        }
+    }
+
+    private var scheduleView: some View {
+        List {
+            Section("Runtime Mode") {
+                LabeledContent("Current") {
+                    Text(model.runtimeModeText)
+                }
+
+                HStack {
+                    Button("Resume Schedule") {
+                        Task { @MainActor in await setRuntimeModeSchedule() }
+                    }
+                    .disabled(!model.canControlRuntimeMode)
+
+                    Spacer()
+
+                    Button("Manual Off") {
+                        Task { @MainActor in await setRuntimeModeOff() }
+                    }
+                    .disabled(!model.canControlRuntimeMode)
+                }
+            }
+
+            Section("Schedule") {
+                if let schedule = model.schedule {
                     ForEach(Array(schedule.activeSlots.enumerated()), id: \.offset) { index, slot in
                         NavigationLink {
-                            HeatingSlotEditorView(slotIndex: index, slot: slot, schedule: $schedule)
+                            HeatingSlotEditorView(
+                                slotIndex: index,
+                                slot: slot,
+                                schedule: schedule
+                            ) { updatedSchedule in
+                                try await model.save(schedule: updatedSchedule)
+                            }
                         } label: {
                             HeatingScheduleRow(slot: slot)
                         }
+                        .disabled(!model.canEditSchedule)
                     }
+                } else {
+                    Text("No heating schedule is loaded.")
+                        .foregroundStyle(.secondary)
                 }
             }
-            .navigationTitle("Heating")
+        }
+        .overlay(alignment: .top) {
+            if model.serviceState == .loading {
+                ProgressView()
+                    .padding(.top, 12)
+            }
         }
     }
-}
 
-extension HeatingView {
-    static func makeSeededLocalSchedule() -> HeatingSchedule {
-        HeatingSchedule(visibleSlots: SeededLocalVisibleSlots.slots)!
+    private func statusView(
+        title: String,
+        message: String,
+        systemImage: String,
+        showsRetry: Bool = false,
+        retryAction: (() -> Void)? = nil
+    ) -> some View {
+        VStack(spacing: 12) {
+            Image(systemName: systemImage)
+                .font(.system(size: 34, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            Text(title)
+                .font(.title2.weight(.semibold))
+
+            Text(message)
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
+
+            if showsRetry, let retryAction {
+                Button("Retry", action: retryAction)
+                    .buttonStyle(.borderedProminent)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(24)
     }
-}
 
-private enum SeededLocalVisibleSlots {
-    static let slots: [HeatingScheduleVisibleSlot] = [
-        .active(HeatingScheduleSlot(
-            startMinuteOfDay: 0,
-            endMinuteOfDay: 6 * 60 + 30,
-            mode: .off
-        )),
-        .active(HeatingScheduleSlot(
-            startMinuteOfDay: 6 * 60 + 30,
-            endMinuteOfDay: 8 * 60,
-            mode: .heat,
-            targetTemperatureCelsius: 21
-        )),
-        .active(HeatingScheduleSlot(
-            startMinuteOfDay: 8 * 60,
-            endMinuteOfDay: 17 * 60,
-            mode: .off
-        )),
-        .active(HeatingScheduleSlot(
-            startMinuteOfDay: 17 * 60,
-            endMinuteOfDay: HeatingSchedule.minutesInDay,
-            mode: .heat,
-            targetTemperatureCelsius: 19
-        ))
-    ]
+    private var alertMessageIsPresented: Binding<Bool> {
+        Binding(
+            get: { model.alertMessage != nil },
+            set: { isPresented in
+                if !isPresented {
+                    model.alertMessage = nil
+                }
+            }
+        )
+    }
+
+    private func setRuntimeModeSchedule() async {
+        do {
+            try await model.setRuntimeModeSchedule()
+        } catch let error as HeatingFeatureModelError {
+            model.alertMessage = HeatingFeatureModel.message(for: error)
+        } catch {
+            model.alertMessage = error.localizedDescription
+        }
+    }
+
+    private func setRuntimeModeOff() async {
+        do {
+            try await model.setRuntimeModeOff()
+        } catch let error as HeatingFeatureModelError {
+            model.alertMessage = HeatingFeatureModel.message(for: error)
+        } catch {
+            model.alertMessage = error.localizedDescription
+        }
+    }
 }
 
 private struct HeatingScheduleRow: View {

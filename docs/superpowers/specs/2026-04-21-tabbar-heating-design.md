@@ -5,25 +5,31 @@
 Add a two-tab app shell to `JonesControl` with:
 
 - a `Garmin` tab for the existing router web view
-- a `Heating` tab for a simple local daily schedule editor
+- a `Heating` tab for a simple server-backed daily schedule editor
+
+Then extend it to a three-tab shell by adding:
+
+- a `Settings` tab for configuring the heating service endpoint and sending a separate manual-off command
 
 The tab bar should be visible in portrait, animate away in landscape, and animate back in portrait.
 
 ## Scope
 
-This design covers only:
+This design covers:
 
 - app-level tab navigation
 - tab bar visibility behavior for orientation changes
-- a local-only heating schedule model and UI
+- a linked-slot heating schedule model and UI
 - a simple slot list plus slot edit screen
+- heating schedule fetch/save against the service API
+- a Settings tab for base URL configuration and manual-off control
 
 This design does not include:
 
-- live integration with `/Users/rog/Development/xtura-automation`
 - weekday-specific scheduling
-- schedule syncing, background refresh, or persistence outside the app’s local state
+- background schedule syncing or live event subscriptions
 - advanced heating controls beyond four visible slots
+- editing multiple backend programs directly
 
 ## Existing Context
 
@@ -39,10 +45,11 @@ The nearby `xtura-automation` project already models heating programs as daily p
 
 ### App Navigation
 
-The root screen becomes a `TabView` with two tabs:
+The root screen becomes a `TabView` with three tabs:
 
 1. `Garmin`
 2. `Heating`
+3. `Settings`
 
 The active tab remains selected even when the tab bar hides in landscape.
 
@@ -85,11 +92,27 @@ Rules:
 
 The four visible slots behave as a linked chain. Editing one slot boundary adjusts adjacent visible slots so the schedule remains contiguous.
 
+### Settings Tab
+
+The Settings tab contains:
+
+- a text field for the heating service host/base URL
+- status or error messaging for schedule fetch/save behavior
+- current heating runtime mode display
+- a `Manual Off` action
+- a `Resume Schedule` action
+
+The service is assumed to be reachable over Tailscale using plain HTTP, for example:
+
+- `http://vanpi.tail1234.ts.net:8080`
+
+The manual-off action is not encoded into the schedule document. It is a separate service operation using the runtime-mode API.
+
 ## Data Model
 
 ### Visible UI Model
 
-The Heating tab stores exactly four editable visible slots in local app state.
+The Heating tab stores exactly four editable visible slots in app memory while the editor is active.
 
 Each slot contains:
 
@@ -116,7 +139,33 @@ The linked-slot rule is important:
 - if an edit would squeeze a later slot below 15 minutes, the change propagates through later slots until all visible slots remain valid
 - the same rule applies in reverse when a start boundary change needs to affect earlier slots
 
-This local model is the source of truth for the UI.
+The server is the source of truth. The local linked-slot model is only an in-memory editing projection of the last successfully fetched server document.
+
+### Network Model
+
+The app also keeps the last fetched heating schedule document from the service API, including:
+
+- `timezone`
+- `programs`
+- `revision`
+
+For the first networked version, the app edits only one synthetic all-days schedule:
+
+- one enabled program
+- days covering `mon` through `sun`
+
+The UI does not expose multiple backend programs yet.
+
+Editing availability rules:
+
+- the app must fetch the server document successfully before enabling schedule editing
+- if the service is unreachable, the app should not allow offline schedule edits
+- unsaved local changes are not treated as durable state
+
+The app also keeps the current heating runtime mode document from the service, including:
+
+- effective mode: `schedule`, `off`, `manual`, or `boost`
+- any associated runtime metadata returned by the API
 
 ### Hidden Padding Periods
 
@@ -139,7 +188,14 @@ The local model should expose a transform that can later map into the `xtura-aut
 
 Because the visible slots are contiguous, export is now mostly a translation of the linked chain plus optional leading/trailing hidden `off` periods when the visible schedule does not touch day boundaries.
 
-This keeps the first implementation local while preserving a clean future path into the existing backend model.
+This keeps the app model aligned with the backend model.
+
+For service integration:
+
+- the app fetches the full document
+- the app maps one editable all-days program into the linked four-slot UI
+- the app writes back a full replacement document with the last seen `revision`
+- the app fetches the current heating runtime mode separately
 
 ## Screen Structure
 
@@ -150,6 +206,7 @@ The current root content should be split into:
 - an app shell view that owns the selected tab and orientation-aware tab bar visibility
 - a Garmin feature view
 - a Heating feature view
+- a Settings feature view
 
 This gives each feature a clear boundary and keeps `ContentView` from becoming a large mixed-responsibility file.
 
@@ -178,7 +235,7 @@ Tapping a row opens a simple edit screen for that slot with:
 - on/off picker or toggle
 - target temperature control shown only when `on`
 
-The edit screen writes back into local app state.
+The edit screen writes back into the in-memory draft derived from the last fetched server document.
 
 Key behavior:
 
@@ -187,6 +244,22 @@ Key behavior:
 - the UI should still surface errors for truly impossible edits, but normal boundary changes should resolve through propagation rather than failure
 
 The first pass should prefer simple standard iOS controls over custom schedule widgets.
+
+### Settings Screen
+
+The Settings screen includes:
+
+- editable base URL / host field
+- fetch/apply behavior for connection settings
+- current runtime mode summary
+- a `Manual Off` button
+- a `Resume Schedule` button
+- user-facing feedback for:
+  - transport errors
+  - unsupported server schedule shapes
+  - `409` revision conflicts
+  - `400 validation_failed` responses
+  - service unavailable / offline editing disabled state
 
 ## Architecture
 
@@ -200,10 +273,18 @@ The first pass should prefer simple standard iOS controls over custom schedule w
   - wraps the current Garmin launch/router UI
 - Heating feature view
   - owns the schedule list screen
+- Settings feature view
+  - owns heating service endpoint configuration and manual-off action
 - Heating schedule model
-  - owns four visible slots, validation, and export transformation
+  - owns four visible linked slots, validation, and export transformation
 - Heating slot edit view
   - edits one slot at a time
+- Heating schedule API client
+  - fetches and saves the full schedule document
+- Heating mode API client
+  - fetches the current runtime mode and sends runtime mode commands
+- Heating schedule mapper
+  - converts between the server document/program shape and the app’s linked four-slot schedule
 
 The key design principle is to separate:
 
@@ -211,6 +292,27 @@ The key design principle is to separate:
 - Garmin concerns
 - Heating concerns
 - schedule data logic
+- network document and mapping logic
+
+### Service API Integration
+
+The current service contract is:
+
+- `GET /v1/automation/heating-schedule`
+- `PUT /v1/automation/heating-schedule`
+- `GET /v1/heating/mode`
+- `POST /v1/heating/mode/schedule`
+- `POST /v1/heating/mode/off`
+
+For the first version:
+
+- Heating tab loads and saves one synthetic all-days schedule through the schedule document API
+- Heating tab is editable only after a successful fetch from the configured server
+- Settings loads and displays the current runtime mode
+- `Manual Off` calls `POST /v1/heating/mode/off`
+- `Resume Schedule` calls `POST /v1/heating/mode/schedule`
+
+The app does not need manual-target or boost controls yet even though the API supports them.
 
 ## Error Handling And Validation
 
@@ -219,6 +321,10 @@ For the first pass:
 - invalid slot edits should be prevented or surfaced inline in the edit screen
 - boundary edits should auto-propagate through linked neighbors before surfacing failure
 - mode/target mismatch should be corrected automatically where reasonable
+- transport, conflict, and validation errors from the service should be shown explicitly
+- unsupported server document shapes should be surfaced instead of guessed at
+- runtime mode fetch/set failures should be surfaced separately from schedule save failures
+- if the server cannot be reached, schedule editing should be disabled rather than falling back to offline local edits
 
 Examples:
 
@@ -226,8 +332,15 @@ Examples:
 - switching a slot to `on` requires a target before saving
 - extending a slot end updates the next slot start
 - if that change would shrink later slots below 15 minutes, later slot boundaries move as needed
+- a `409` schedule revision conflict triggers refetch and user retry
+- a `400 validation_failed` response displays the returned server messages
+- a runtime-mode request failure leaves the saved schedule untouched and shows a transport/action error
+- a schedule fetch failure leaves the Heating screen unavailable for editing until the server can be reached
 
-No backend/network error handling is needed yet because Heating is local-only.
+Unsupported first-version server cases include:
+
+- multiple backend programs that cannot be safely represented as one all-days linked schedule
+- missing all-days coverage when the app would otherwise have to guess a merge strategy
 
 ## Testing
 
@@ -238,31 +351,34 @@ The implementation should include tests for:
 - enforcement of the 15-minute minimum duration
 - hidden padding/off-period derivation from visible slots
 - export transformation into a backend-friendly sequence of periods
+- mapping between the server document and the linked four-slot app model
+- API-client handling for success, `409`, and `400 validation_failed`
+- runtime-mode client handling for current-mode fetch, manual off, and resume schedule
 
 UI-specific edit interactions can remain lightly tested in the first pass if the model logic is covered well.
 
 ## Tradeoffs
 
-This design intentionally keeps Heating local for now.
+This design keeps the Heating UI intentionally narrow even though it now talks to the real service.
 
 Pros:
 
-- faster implementation
-- lower risk
-- easier to iterate on the UI before integrating the real service
+- simpler editor model
+- lower risk than exposing the full backend program set
+- easier to ship a clear first version around one all-days schedule
 
 Cons:
 
-- no live sync with `xtura-automation` yet
-- users can edit a schedule that does not yet affect the real heater
+- the app does not expose multiple backend programs yet
+- unsupported server schedule shapes must be surfaced instead of merged automatically
 
-That tradeoff is acceptable because the goal of this pass is to establish the app shell and a clean local schedule-editing experience.
+That tradeoff is acceptable because the goal of this pass is to establish the app shell, service-backed schedule editing, and simple runtime controls without overbuilding the editor.
 
 ## Follow-Up Work
 
 Likely next steps after this pass:
 
-- connect the local Heating model to `xtura-automation`
 - persist the schedule
-- add schedule loading/saving and error states
 - support weekday-specific programs
+- support multiple backend programs directly
+- add manual target / boost controls if they prove useful

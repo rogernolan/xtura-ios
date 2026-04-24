@@ -442,16 +442,43 @@ struct HeatingScheduleSlot: Equatable, Sendable {
             return HeatingScheduleExportState(mode: .heat, targetTemperatureCelsius: targetTemperatureCelsius)
         }
     }
+
+    nonisolated static func == (lhs: HeatingScheduleSlot, rhs: HeatingScheduleSlot) -> Bool {
+        lhs.startMinuteOfDay == rhs.startMinuteOfDay
+            && lhs.endMinuteOfDay == rhs.endMinuteOfDay
+            && lhs.mode == rhs.mode
+            && lhs.targetTemperatureCelsius == rhs.targetTemperatureCelsius
+    }
 }
 
 enum HeatingScheduleMode: Equatable, Sendable {
     case off
     case heat
+
+    nonisolated static func == (lhs: HeatingScheduleMode, rhs: HeatingScheduleMode) -> Bool {
+        switch (lhs, rhs) {
+        case (.off, .off), (.heat, .heat):
+            return true
+        default:
+            return false
+        }
+    }
 }
 
 enum HeatingScheduleVisibleSlot: Equatable, Sendable {
     case empty
     case active(HeatingScheduleSlot)
+
+    nonisolated static func == (lhs: HeatingScheduleVisibleSlot, rhs: HeatingScheduleVisibleSlot) -> Bool {
+        switch (lhs, rhs) {
+        case (.empty, .empty):
+            return true
+        case (.active(let lhsSlot), .active(let rhsSlot)):
+            return lhsSlot == rhsSlot
+        default:
+            return false
+        }
+    }
 }
 
 struct HeatingScheduleSlotEditingBounds: Equatable, Sendable {
@@ -459,6 +486,13 @@ struct HeatingScheduleSlotEditingBounds: Equatable, Sendable {
     let latestStartMinuteOfDay: Int
     let earliestEndMinuteOfDay: Int
     let latestEndMinuteOfDay: Int
+
+    nonisolated static func == (lhs: HeatingScheduleSlotEditingBounds, rhs: HeatingScheduleSlotEditingBounds) -> Bool {
+        lhs.earliestStartMinuteOfDay == rhs.earliestStartMinuteOfDay
+            && lhs.latestStartMinuteOfDay == rhs.latestStartMinuteOfDay
+            && lhs.earliestEndMinuteOfDay == rhs.earliestEndMinuteOfDay
+            && lhs.latestEndMinuteOfDay == rhs.latestEndMinuteOfDay
+    }
 }
 
 struct HeatingScheduleExportPeriod: Equatable, Sendable {
@@ -470,6 +504,12 @@ struct HeatingScheduleExportPeriod: Equatable, Sendable {
         self.startMinuteOfDay = startMinuteOfDay
         self.mode = mode
         self.targetTemperatureCelsius = targetTemperatureCelsius
+    }
+
+    nonisolated static func == (lhs: HeatingScheduleExportPeriod, rhs: HeatingScheduleExportPeriod) -> Bool {
+        lhs.startMinuteOfDay == rhs.startMinuteOfDay
+            && lhs.mode == rhs.mode
+            && lhs.targetTemperatureCelsius == rhs.targetTemperatureCelsius
     }
 }
 
@@ -496,4 +536,208 @@ private struct HeatingScheduleExportState: Equatable, Sendable {
     var targetTemperatureCelsius: Double?
 
     static let off = HeatingScheduleExportState(mode: .off, targetTemperatureCelsius: nil)
+}
+
+enum HeatingScheduleMappingError: Error, Equatable, Sendable {
+    case programCountUnsupported(Int)
+    case programMustBeEnabledAllDays(id: String, days: [HeatingScheduleWeekday], enabled: Bool)
+    case periodsEmpty(programID: String)
+    case firstPeriodMustStartAtMidnight(programID: String)
+    case periodsOutOfOrder(programID: String, start: String)
+    case heatPeriodMissingTarget(programID: String, start: String)
+    case incompatibleShape(periodCount: Int)
+    case invalidTime(String)
+    case exportFailed(HeatingScheduleExportValidationError)
+}
+
+extension HeatingSchedule {
+    static func linkedDocument(from document: HeatingScheduleDocument) throws -> HeatingLinkedScheduleDocument {
+        guard document.programs.count == 1 else {
+            throw HeatingScheduleMappingError.programCountUnsupported(document.programs.count)
+        }
+
+        let program = document.programs[0]
+        guard program.enabled, program.days == HeatingScheduleWeekday.allDays else {
+            throw HeatingScheduleMappingError.programMustBeEnabledAllDays(
+                id: program.id,
+                days: program.days,
+                enabled: program.enabled
+            )
+        }
+
+        let schedule = try Self(serverProgram: program)
+        return HeatingLinkedScheduleDocument(
+            timezone: document.timezone,
+            revision: document.revision,
+            programID: program.id,
+            schedule: schedule
+        )
+    }
+
+    init(serverProgram program: HeatingScheduleProgram) throws {
+        guard !program.periods.isEmpty else {
+            throw HeatingScheduleMappingError.periodsEmpty(programID: program.id)
+        }
+
+        var importedSlots: [HeatingScheduleSlot] = []
+        importedSlots.reserveCapacity(program.periods.count)
+
+        for (index, period) in program.periods.enumerated() {
+            let startMinute = try Self.minuteOfDay(from: period.start)
+            if index == 0, startMinute != 0 {
+                throw HeatingScheduleMappingError.firstPeriodMustStartAtMidnight(programID: program.id)
+            }
+
+            let endMinute: Int
+            if let nextPeriod = program.periods[safe: index + 1] {
+                endMinute = try Self.minuteOfDay(from: nextPeriod.start)
+            } else {
+                endMinute = Self.minutesInDay
+            }
+
+            guard endMinute > startMinute else {
+                throw HeatingScheduleMappingError.periodsOutOfOrder(programID: program.id, start: period.start)
+            }
+
+            if period.mode == .heat, period.targetCelsius == nil {
+                throw HeatingScheduleMappingError.heatPeriodMissingTarget(programID: program.id, start: period.start)
+            }
+
+            importedSlots.append(
+                HeatingScheduleSlot(
+                    startMinuteOfDay: startMinute,
+                    endMinuteOfDay: endMinute,
+                    mode: Self.mode(for: period.mode),
+                    targetTemperatureCelsius: period.targetCelsius
+                )
+            )
+        }
+
+        let paddedSlots = try Self.paddingToVisibleSlotCount(importedSlots)
+        guard let schedule = HeatingSchedule(activeSlots: paddedSlots) else {
+            throw HeatingScheduleMappingError.incompatibleShape(periodCount: importedSlots.count)
+        }
+
+        self = schedule
+    }
+
+    func serverDocument(
+        timezone: String,
+        revision: String,
+        programID: String
+    ) throws -> HeatingScheduleDocument {
+        let periods: [HeatingSchedulePeriod]
+        do {
+            periods = try exportedPeriods().map { period in
+                HeatingSchedulePeriod(
+                    start: Self.timeString(minuteOfDay: period.startMinuteOfDay),
+                    mode: Self.periodMode(for: period.mode),
+                    targetCelsius: period.targetTemperatureCelsius
+                )
+            }
+        } catch let error as HeatingScheduleExportValidationError {
+            throw HeatingScheduleMappingError.exportFailed(error)
+        }
+
+        return HeatingScheduleDocument(
+            timezone: timezone,
+            programs: [
+                HeatingScheduleProgram(
+                    id: programID,
+                    enabled: true,
+                    days: HeatingScheduleWeekday.allDays,
+                    periods: periods
+                )
+            ],
+            revision: revision
+        )
+    }
+
+    private static func paddingToVisibleSlotCount(
+        _ slots: [HeatingScheduleSlot]
+    ) throws -> [HeatingScheduleSlot] {
+        guard slots.count <= visibleSlotCount else {
+            throw HeatingScheduleMappingError.incompatibleShape(periodCount: slots.count)
+        }
+
+        var paddedSlots = slots
+        while paddedSlots.count < visibleSlotCount {
+            guard let splitIndex = paddedSlots.indices
+                .filter({ paddedSlots[$0].endMinuteOfDay - paddedSlots[$0].startMinuteOfDay >= minimumSlotDurationMinutes * 2 })
+                .max(by: { lhs, rhs in
+                    let lhsDuration = paddedSlots[lhs].endMinuteOfDay - paddedSlots[lhs].startMinuteOfDay
+                    let rhsDuration = paddedSlots[rhs].endMinuteOfDay - paddedSlots[rhs].startMinuteOfDay
+                    if lhsDuration == rhsDuration {
+                        return lhs > rhs
+                    }
+                    return lhsDuration < rhsDuration
+                }) else {
+                throw HeatingScheduleMappingError.incompatibleShape(periodCount: slots.count)
+            }
+
+            let slot = paddedSlots[splitIndex]
+            let splitPoint = slot.startMinuteOfDay + minimumSlotDurationMinutes
+            paddedSlots[splitIndex] = HeatingScheduleSlot(
+                startMinuteOfDay: slot.startMinuteOfDay,
+                endMinuteOfDay: splitPoint,
+                mode: slot.mode,
+                targetTemperatureCelsius: slot.targetTemperatureCelsius
+            )
+            paddedSlots.insert(
+                HeatingScheduleSlot(
+                    startMinuteOfDay: splitPoint,
+                    endMinuteOfDay: slot.endMinuteOfDay,
+                    mode: slot.mode,
+                    targetTemperatureCelsius: slot.targetTemperatureCelsius
+                ),
+                at: splitIndex + 1
+            )
+        }
+
+        return paddedSlots
+    }
+
+    private static func minuteOfDay(from timeString: String) throws -> Int {
+        let components = timeString.split(separator: ":", omittingEmptySubsequences: false)
+        guard components.count == 2,
+              let hour = Int(components[0]),
+              let minute = Int(components[1]),
+              (0...24).contains(hour),
+              (0..<60).contains(minute),
+              hour < 24 || minute == 0 else {
+            throw HeatingScheduleMappingError.invalidTime(timeString)
+        }
+
+        return (hour * 60) + minute
+    }
+
+    private static func timeString(minuteOfDay: Int) -> String {
+        let hour = minuteOfDay / 60
+        let minute = minuteOfDay % 60
+        return String(format: "%02d:%02d", hour, minute)
+    }
+
+    private static func mode(for periodMode: HeatingSchedulePeriodMode) -> HeatingScheduleMode {
+        switch periodMode {
+        case .off:
+            return .off
+        case .heat:
+            return .heat
+        }
+    }
+
+    private static func periodMode(for mode: HeatingScheduleMode) -> HeatingSchedulePeriodMode {
+        switch mode {
+        case .off:
+            return .off
+        case .heat:
+            return .heat
+        }
+    }
+}
+
+private extension Array {
+    subscript(safe index: Int) -> Element? {
+        indices.contains(index) ? self[index] : nil
+    }
 }

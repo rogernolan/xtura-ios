@@ -2,20 +2,23 @@ import Foundation
 import SwiftUI
 
 struct HeatingSlotEditorView: View {
-    @Binding private var schedule: HeatingSchedule
     @Environment(\.dismiss) private var dismiss
     @State private var draft: HeatingSlotEditorDraft
     @State private var alertMessage: String?
 
     private let slotIndex: Int
+    private let schedule: HeatingSchedule
+    private let saveAction: @Sendable (HeatingSchedule) async throws -> Void
 
     init(
         slotIndex: Int,
         slot: HeatingScheduleSlot,
-        schedule: Binding<HeatingSchedule>
+        schedule: HeatingSchedule,
+        saveAction: @escaping @Sendable (HeatingSchedule) async throws -> Void
     ) {
         self.slotIndex = slotIndex
-        self._schedule = schedule
+        self.schedule = schedule
+        self.saveAction = saveAction
         self._draft = State(initialValue: HeatingSlotEditorDraft(slot: slot))
     }
 
@@ -124,35 +127,38 @@ struct HeatingSlotEditorView: View {
     }
 
     private func save() {
+        let updatedScheduleResult: Result<HeatingSchedule, HeatingScheduleUpdateError>
         switch draft.slotKind {
         case .off:
-            switch schedule.updatingLinkedSlot(
+            updatedScheduleResult = schedule.updatingLinkedSlot(
                 at: slotIndex,
                 startMinuteOfDay: draft.startMinuteOfDay,
                 endMinuteOfDay: draft.endMinuteOfDay,
                 mode: .off,
                 targetTemperatureCelsius: nil
-            ) {
-            case .success(let updatedSchedule):
-                schedule = updatedSchedule
-                dismiss()
-            case .failure(let error):
-                alertMessage = Self.message(for: error)
-            }
+            )
         case .heat:
-            switch schedule.updatingLinkedSlot(
+            updatedScheduleResult = schedule.updatingLinkedSlot(
                 at: slotIndex,
                 startMinuteOfDay: draft.startMinuteOfDay,
                 endMinuteOfDay: draft.endMinuteOfDay,
                 mode: .heat,
                 targetTemperatureCelsius: draft.currentHeatTargetTemperatureCelsius ?? Self.defaultTargetTemperatureCelsius
-            ) {
-            case .success(let updatedSchedule):
-                schedule = updatedSchedule
-                dismiss()
-            case .failure(let error):
-                alertMessage = Self.message(for: error)
+            )
+        }
+
+        switch updatedScheduleResult {
+        case .success(let updatedSchedule):
+            Task { @MainActor in
+                do {
+                    try await saveAction(updatedSchedule)
+                    dismiss()
+                } catch {
+                    alertMessage = Self.message(for: error)
+                }
             }
+        case .failure(let error):
+            alertMessage = Self.message(for: error)
         }
     }
 
@@ -168,6 +174,37 @@ struct HeatingSlotEditorView: View {
         draft.endMinuteOfDay = min(max(draft.endMinuteOfDay, minimumEnd), bounds.latestEndMinuteOfDay)
     }
 
+    private static func message(for error: Error) -> String {
+        if let error = error as? HeatingScheduleUpdateError {
+            return message(for: error)
+        }
+
+        if let error = error as? HeatingFeatureModelError {
+            return HeatingFeatureModel.message(for: error)
+        }
+
+        if let error = error as? HeatingServiceError {
+            switch error {
+            case .conflict(let message):
+                return message
+            case .validationFailed(let messages):
+                return messages.joined(separator: "\n")
+            case .transport:
+                return "The heating service could not be reached."
+            case .invalidBaseURL:
+                return "The heating service URL is not configured."
+            case .invalidResponse:
+                return "The heating service returned an invalid response."
+            case .decoding:
+                return "The heating service returned data JonesControl could not read."
+            case .server(_, let message):
+                return message
+            }
+        }
+
+        return error.localizedDescription
+    }
+
     private static func message(for error: HeatingScheduleUpdateError) -> String {
         switch error {
         case .slotIndexOutOfRange:
@@ -175,7 +212,7 @@ struct HeatingSlotEditorView: View {
         case .slotCountInvalid:
             return "The schedule is missing slots."
         case .validationErrors(let errors):
-            return errors.map { Self.message(for: $0) }.joined(separator: "\n")
+            return errors.map { message(for: $0) }.joined(separator: "\n")
         }
     }
 
