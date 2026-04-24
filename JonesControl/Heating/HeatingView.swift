@@ -1,6 +1,9 @@
 import SwiftUI
 
 struct HeatingView: View {
+    private static let manualPresetTargets = [5.0, 12.0, 21.0]
+    private static let manualTargetSendDebounceNanoseconds: UInt64 = 500_000_000
+
     @Environment(\.scenePhase) private var scenePhase
     @Environment(HeatingServiceSettings.self) private var heatingServiceSettings
     @State private var model = HeatingFeatureModel()
@@ -8,6 +11,7 @@ struct HeatingView: View {
     @State private var manualTargetCelsius = HeatingFeatureModel.defaultManualTargetCelsius
     @State private var isSyncingRuntimeModeControls = false
     @State private var suppressNextRuntimeModeSelectionChange = false
+    @State private var pendingManualTargetSendTask: Task<Void, Never>?
 
     var body: some View {
         NavigationStack {
@@ -42,6 +46,17 @@ struct HeatingView: View {
             Task { @MainActor in
                 await applyRuntimeModeSelection(newValue)
             }
+        }
+        .onChange(of: manualTargetCelsius, initial: false) { oldValue, newValue in
+            guard oldValue != newValue else {
+                return
+            }
+
+            scheduleDebouncedManualTargetSendIfNeeded()
+        }
+        .onDisappear {
+            pendingManualTargetSendTask?.cancel()
+            pendingManualTargetSendTask = nil
         }
         .alert("Heating", isPresented: alertMessageIsPresented) {
             Button("OK", role: .cancel) { }
@@ -130,13 +145,14 @@ struct HeatingView: View {
                         }
                         .disabled(!model.canControlRuntimeMode || model.isChangingRuntimeMode)
 
-                        if model.runtimeModeControlSelection == .manual {
-                            Button("Apply Manual Target") {
-                                Task { @MainActor in
-                                    await applyManualTarget()
+                        HStack(spacing: 8) {
+                            ForEach(Self.manualPresetTargets, id: \.self) { target in
+                                Button(temperatureLabel(for: target)) {
+                                    sendManualPreset(target)
                                 }
+                                .buttonStyle(.bordered)
+                                .disabled(!model.canControlRuntimeMode || model.isChangingRuntimeMode)
                             }
-                            .disabled(!model.canControlRuntimeMode || model.isChangingRuntimeMode || manualTargetMatchesCurrentMode)
                         }
                     }
                 }
@@ -145,7 +161,7 @@ struct HeatingView: View {
                     HStack(spacing: 8) {
                         ProgressView()
                             .controlSize(.small)
-                        Text("Updating runtime mode...")
+                        Text("Sending settings to xtura...")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
@@ -265,6 +281,8 @@ struct HeatingView: View {
 
     private func syncRuntimeModeControls() {
         isSyncingRuntimeModeControls = true
+        pendingManualTargetSendTask?.cancel()
+        pendingManualTargetSendTask = nil
         let syncedSelection = model.runtimeModeControlSelection
         if selectedRuntimeMode != syncedSelection {
             suppressNextRuntimeModeSelectionChange = true
@@ -285,16 +303,44 @@ struct HeatingView: View {
         }
     }
 
-    private func applyManualTarget() async {
-        await setRuntimeModeManual(targetCelsius: manualTargetCelsius)
+    private func scheduleDebouncedManualTargetSendIfNeeded() {
+        guard selectedRuntimeMode == .manual,
+              model.runtimeModeControlSelection == .manual,
+              model.canControlRuntimeMode,
+              !model.isChangingRuntimeMode,
+              manualTargetNeedsSending else {
+            return
+        }
+
+        pendingManualTargetSendTask?.cancel()
+        let target = manualTargetCelsius
+        pendingManualTargetSendTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: Self.manualTargetSendDebounceNanoseconds)
+            guard !Task.isCancelled else {
+                return
+            }
+
+            await setRuntimeModeManual(targetCelsius: target)
+            pendingManualTargetSendTask = nil
+        }
     }
 
-    private var manualTargetMatchesCurrentMode: Bool {
+    private func sendManualPreset(_ targetCelsius: Double) {
+        pendingManualTargetSendTask?.cancel()
+        pendingManualTargetSendTask = nil
+        manualTargetCelsius = targetCelsius
+
+        Task { @MainActor in
+            await setRuntimeModeManual(targetCelsius: targetCelsius)
+        }
+    }
+
+    private var manualTargetNeedsSending: Bool {
         guard model.runtimeModeDocument?.mode == .manual else {
             return false
         }
 
-        return abs(model.effectiveManualTargetCelsius - manualTargetCelsius) < 0.05
+        return abs(model.effectiveManualTargetCelsius - manualTargetCelsius) >= 0.05
     }
 
     private func temperatureLabel(for temperature: Double) -> String {

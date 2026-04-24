@@ -27,7 +27,7 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    Text("JonesControl uses this address for the heating schedule and mode APIs. A typical value looks like `http://vanpi.tail1234.ts.net:8080`.")
+                    Text("JonesControl uses this address for the heating schedule and mode APIs. A typical value looks like `\(HeatingServiceSettings.defaultBaseURL)`.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }

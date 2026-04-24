@@ -7,12 +7,22 @@ struct HeatingServiceSettingsTests {
     @Test func loadsPersistedBaseURL() {
         let userDefaults = UserDefaults(suiteName: #function)!
         userDefaults.removePersistentDomain(forName: #function)
-        userDefaults.set("http://vanpi.tail1234.ts.net:8080", forKey: HeatingServiceSettings.baseURLKey)
+        userDefaults.set("http://jones-pi.taile19bc2.ts.net:8080", forKey: HeatingServiceSettings.baseURLKey)
 
         let settings = HeatingServiceSettings(userDefaults: userDefaults)
 
-        #expect(settings.baseURLText == "http://vanpi.tail1234.ts.net:8080")
-        #expect(settings.configuredBaseURL?.absoluteString == "http://vanpi.tail1234.ts.net:8080")
+        #expect(settings.baseURLText == "http://jones-pi.taile19bc2.ts.net:8080")
+        #expect(settings.configuredBaseURL?.absoluteString == "http://jones-pi.taile19bc2.ts.net:8080")
+    }
+
+    @Test func defaultsToJonesPiBaseURLWhenUnset() {
+        let userDefaults = UserDefaults(suiteName: #function)!
+        userDefaults.removePersistentDomain(forName: #function)
+
+        let settings = HeatingServiceSettings(userDefaults: userDefaults)
+
+        #expect(settings.baseURLText == HeatingServiceSettings.defaultBaseURL)
+        #expect(settings.configuredBaseURL?.absoluteString == HeatingServiceSettings.defaultBaseURL)
     }
 
     @Test func persistsBaseURLChanges() {
