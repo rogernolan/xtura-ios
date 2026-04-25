@@ -4,6 +4,7 @@ struct AppShellView: View {
     enum Tab: Hashable {
         case garmin
         case heating
+        case lighting
         case settings
     }
 
@@ -25,6 +26,12 @@ struct AppShellView: View {
                         Label("Heating", systemImage: "flame")
                     }
                     .tag(Tab.heating)
+
+                LightingView()
+                    .tabItem {
+                        Label("Lighting", systemImage: "lightbulb")
+                    }
+                    .tag(Tab.lighting)
 
                 SettingsView(settings: heatingServiceSettings)
                     .tabItem {
