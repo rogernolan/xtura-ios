@@ -5,6 +5,8 @@ import Observation
 @Observable
 final class HeatingFeatureModel {
     static let defaultManualTargetCelsius = 19.0
+    static let defaultBoostTargetCelsius = 21.0
+    static let defaultBoostDurationMinutes = 60
 
     enum ServiceState: Equatable {
         case loading
@@ -49,6 +51,10 @@ final class HeatingFeatureModel {
 
     var canControlRuntimeMode: Bool {
         canEditSchedule
+    }
+
+    var isBoostActive: Bool {
+        runtimeModeDocument?.mode == .boost
     }
 
     var statusTitle: String {
@@ -113,6 +119,18 @@ final class HeatingFeatureModel {
 
     var effectiveManualTargetCelsius: Double {
         runtimeModeDocument?.manualTargetCelsius ?? Self.defaultManualTargetCelsius
+    }
+
+    var activeBoostTargetCelsius: Double? {
+        runtimeModeDocument?.boost?.targetCelsius
+    }
+
+    var activeBoostExpiresAt: Date? {
+        guard let expiresAt = runtimeModeDocument?.boost?.expiresAt else {
+            return nil
+        }
+
+        return Self.runtimeModeDate(from: expiresAt)
     }
 
     init(
@@ -205,6 +223,19 @@ final class HeatingFeatureModel {
         try await enqueueRuntimeModeRequest(.off)
     }
 
+    func setRuntimeModeBoost(targetCelsius: Double, durationMinutes: Int) async throws {
+        try await enqueueRuntimeModeRequest(
+            .boost(
+                targetCelsius: targetCelsius,
+                durationMinutes: durationMinutes
+            )
+        )
+    }
+
+    func cancelRuntimeModeBoost() async throws {
+        try await enqueueRuntimeModeRequest(.cancelBoost)
+    }
+
     private func enqueueRuntimeModeRequest(_ request: HeatingRuntimeModeRequest) async throws {
         pendingRuntimeModeRequest = request
 
@@ -235,6 +266,13 @@ final class HeatingFeatureModel {
                 modeDocument = try await service.setHeatingModeManual(targetCelsius: targetCelsius)
             case .off:
                 modeDocument = try await service.setHeatingModeOff()
+            case .boost(let targetCelsius, let durationMinutes):
+                modeDocument = try await service.setHeatingModeBoost(
+                    targetCelsius: targetCelsius,
+                    durationMinutes: durationMinutes
+                )
+            case .cancelBoost:
+                modeDocument = try await service.cancelHeatingModeBoost()
             }
             runtimeModeDocument = modeDocument
         } catch let error as HeatingServiceError {
@@ -371,6 +409,36 @@ final class HeatingFeatureModel {
 
         return String(format: "%.1f", temperature)
     }
+
+    static func remainingTimeText(until expiry: Date, now: Date) -> String {
+        let remainingSeconds = max(0, Int(expiry.timeIntervalSince(now).rounded(.down)))
+        let totalMinutes = remainingSeconds / 60
+        let seconds = remainingSeconds % 60
+
+        return String(format: "%02d:%02d", totalMinutes, seconds)
+    }
+
+    nonisolated private static func runtimeModeDate(from string: String) -> Date? {
+        if let date = runtimeModeDateFormatterWithFractionalSeconds.date(from: string) {
+            return date
+        }
+
+        return runtimeModeDateFormatter.date(from: string)
+    }
+
+    @ObservationIgnored
+    nonisolated private static let runtimeModeDateFormatterWithFractionalSeconds: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    @ObservationIgnored
+    nonisolated private static let runtimeModeDateFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
 }
 
 enum HeatingFeatureModelError: Error, Equatable, Sendable {
@@ -405,4 +473,6 @@ enum HeatingRuntimeModeRequest: Equatable, Sendable {
     case schedule
     case manual(targetCelsius: Double)
     case off
+    case boost(targetCelsius: Double, durationMinutes: Int)
+    case cancelBoost
 }

@@ -408,6 +408,28 @@ struct HeatingFeatureModelTests {
                     boost: nil,
                     updatedAt: "2026-04-22T10:31:00Z"
                 )
+            },
+            setModeBoost: { targetCelsius, durationMinutes in
+                #expect(durationMinutes == 60)
+                return HeatingRuntimeModeDocument(
+                    mode: .boost,
+                    manualTargetCelsius: nil,
+                    boost: HeatingRuntimeBoostDocument(
+                        targetCelsius: targetCelsius,
+                        expiresAt: "2026-04-24T09:33:00Z",
+                        resumeMode: .off,
+                        resumeManualTargetCelsius: nil
+                    ),
+                    updatedAt: "2026-04-24T08:33:00Z"
+                )
+            },
+            cancelBoost: {
+                HeatingRuntimeModeDocument(
+                    mode: .schedule,
+                    manualTargetCelsius: nil,
+                    boost: nil,
+                    updatedAt: "2026-04-24T08:45:00Z"
+                )
             }
         )
         let model = HeatingFeatureModel(
@@ -428,6 +450,17 @@ struct HeatingFeatureModelTests {
 
         try await model.setRuntimeModeSchedule()
         #expect(service.setHeatingModeScheduleCallCount == 1)
+        #expect(model.runtimeModeDocument?.mode == .schedule)
+
+        try await model.setRuntimeModeBoost(targetCelsius: 21.5, durationMinutes: 60)
+        #expect(service.setHeatingModeBoostCallCount == 1)
+        #expect(service.lastBoostTargetCelsius == 21.5)
+        #expect(service.lastBoostDurationMinutes == 60)
+        #expect(model.runtimeModeDocument?.mode == .boost)
+        #expect(model.activeBoostTargetCelsius == 21.5)
+
+        try await model.cancelRuntimeModeBoost()
+        #expect(service.cancelHeatingModeBoostCallCount == 1)
         #expect(model.runtimeModeDocument?.mode == .schedule)
     }
 
@@ -557,6 +590,8 @@ private final class HeatingServiceStub: HeatingServicing {
     var setModeScheduleHandler: () async throws -> HeatingRuntimeModeDocument
     var setModeManualHandler: (Double) async throws -> HeatingRuntimeModeDocument
     var setModeOffHandler: () async throws -> HeatingRuntimeModeDocument
+    var setModeBoostHandler: (Double, Int) async throws -> HeatingRuntimeModeDocument
+    var cancelBoostHandler: () async throws -> HeatingRuntimeModeDocument
 
     private(set) var fetchHeatingScheduleCallCount = 0
     private(set) var fetchHeatingModeCallCount = 0
@@ -564,7 +599,11 @@ private final class HeatingServiceStub: HeatingServicing {
     private(set) var setHeatingModeScheduleCallCount = 0
     private(set) var setHeatingModeManualCallCount = 0
     private(set) var setHeatingModeOffCallCount = 0
+    private(set) var setHeatingModeBoostCallCount = 0
+    private(set) var cancelHeatingModeBoostCallCount = 0
     private(set) var lastManualTargetCelsius: Double?
+    private(set) var lastBoostTargetCelsius: Double?
+    private(set) var lastBoostDurationMinutes: Int?
     private(set) var savedDocuments: [HeatingScheduleDocument] = []
 
     init(
@@ -581,6 +620,22 @@ private final class HeatingServiceStub: HeatingServicing {
         },
         setModeOff: @escaping () async throws -> HeatingRuntimeModeDocument = {
             HeatingRuntimeModeDocument(mode: .off, manualTargetCelsius: nil, boost: nil, updatedAt: "")
+        },
+        setModeBoost: @escaping (Double, Int) async throws -> HeatingRuntimeModeDocument = { targetCelsius, _ in
+            HeatingRuntimeModeDocument(
+                mode: .boost,
+                manualTargetCelsius: nil,
+                boost: HeatingRuntimeBoostDocument(
+                    targetCelsius: targetCelsius,
+                    expiresAt: "2026-04-24T09:32:00Z",
+                    resumeMode: .schedule,
+                    resumeManualTargetCelsius: nil
+                ),
+                updatedAt: ""
+            )
+        },
+        cancelBoost: @escaping () async throws -> HeatingRuntimeModeDocument = {
+            HeatingRuntimeModeDocument(mode: .schedule, manualTargetCelsius: nil, boost: nil, updatedAt: "")
         }
     ) {
         self.fetchScheduleHandler = fetchSchedule
@@ -589,6 +644,8 @@ private final class HeatingServiceStub: HeatingServicing {
         self.setModeScheduleHandler = setModeSchedule
         self.setModeManualHandler = setModeManual
         self.setModeOffHandler = setModeOff
+        self.setModeBoostHandler = setModeBoost
+        self.cancelBoostHandler = cancelBoost
     }
 
     func fetchHeatingSchedule() async throws -> HeatingScheduleDocument {
@@ -621,5 +678,17 @@ private final class HeatingServiceStub: HeatingServicing {
     func setHeatingModeOff() async throws -> HeatingRuntimeModeDocument {
         setHeatingModeOffCallCount += 1
         return try await setModeOffHandler()
+    }
+
+    func setHeatingModeBoost(targetCelsius: Double, durationMinutes: Int) async throws -> HeatingRuntimeModeDocument {
+        setHeatingModeBoostCallCount += 1
+        lastBoostTargetCelsius = targetCelsius
+        lastBoostDurationMinutes = durationMinutes
+        return try await setModeBoostHandler(targetCelsius, durationMinutes)
+    }
+
+    func cancelHeatingModeBoost() async throws -> HeatingRuntimeModeDocument {
+        cancelHeatingModeBoostCallCount += 1
+        return try await cancelBoostHandler()
     }
 }

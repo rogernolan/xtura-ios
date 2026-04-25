@@ -133,6 +133,41 @@ struct HeatingServiceTests {
         #expect(body.targetCelsius == 19.5)
     }
 
+    @Test func serviceSendsBoostRequestBody() async throws {
+        let protocolClass = HeatingServiceBoostModeURLProtocol.self
+        protocolClass.reset()
+
+        let session = makeSession(protocolClass: protocolClass)
+        let service = try HeatingService(baseURLString: "http://example.com", session: session)
+
+        let response = try await service.setHeatingModeBoost(targetCelsius: 21.5, durationMinutes: 60)
+
+        #expect(response.mode == .boost)
+        #expect(response.boost?.targetCelsius == 21.5)
+        #expect(protocolClass.lastRequest?.httpMethod == "POST")
+        #expect(protocolClass.lastRequest?.url?.path == "/v1/heating/mode/boost")
+
+        let request = try #require(protocolClass.lastRequest)
+        let requestData = try #require(request.bodyData)
+        let body = try JSONDecoder().decode(HeatingModeBoostRequest.self, from: requestData)
+        #expect(body.targetCelsius == 21.5)
+        #expect(body.durationMinutes == 60)
+    }
+
+    @Test func serviceCallsBoostCancelEndpoint() async throws {
+        let protocolClass = HeatingServiceBoostCancelURLProtocol.self
+        protocolClass.reset()
+
+        let session = makeSession(protocolClass: protocolClass)
+        let service = try HeatingService(baseURLString: "http://example.com", session: session)
+
+        let response = try await service.cancelHeatingModeBoost()
+
+        #expect(response.mode == .schedule)
+        #expect(protocolClass.lastRequest?.httpMethod == "POST")
+        #expect(protocolClass.lastRequest?.url?.path == "/v1/heating/mode/boost/cancel")
+    }
+
     private func makeSession(protocolClass: URLProtocol.Type) -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [protocolClass]
@@ -250,6 +285,57 @@ private final class HeatingServiceManualModeURLProtocol: FixedResponseURLProtoco
                   "mode": "manual",
                   "manual_target_celsius": 19.5,
                   "updated_at": "2026-04-24T08:32:00Z"
+                }
+                """.utf8
+            )
+        )
+    }
+}
+
+private final class HeatingServiceBoostModeURLProtocol: FixedResponseURLProtocol {
+    static var lastRequest: URLRequest?
+
+    static func reset() {
+        lastRequest = nil
+    }
+
+    override func startLoading() {
+        Self.lastRequest = request
+        send(
+            statusCode: 200,
+            data: Data(
+                """
+                {
+                  "mode": "boost",
+                  "boost": {
+                    "target_celsius": 21.5,
+                    "expires_at": "2026-04-24T09:32:00Z",
+                    "resume_mode": "schedule"
+                  },
+                  "updated_at": "2026-04-24T08:32:00Z"
+                }
+                """.utf8
+            )
+        )
+    }
+}
+
+private final class HeatingServiceBoostCancelURLProtocol: FixedResponseURLProtocol {
+    static var lastRequest: URLRequest?
+
+    static func reset() {
+        lastRequest = nil
+    }
+
+    override func startLoading() {
+        Self.lastRequest = request
+        send(
+            statusCode: 200,
+            data: Data(
+                """
+                {
+                  "mode": "schedule",
+                  "updated_at": "2026-04-24T08:45:00Z"
                 }
                 """.utf8
             )

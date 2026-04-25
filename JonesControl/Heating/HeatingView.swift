@@ -3,12 +3,15 @@ import SwiftUI
 struct HeatingView: View {
     private static let manualPresetTargets = [5.0, 12.0, 21.0]
     private static let manualTargetSendDebounceNanoseconds: UInt64 = 500_000_000
+    private static let boostDurationStepMinutes = 15
 
     @Environment(\.scenePhase) private var scenePhase
     @Environment(HeatingServiceSettings.self) private var heatingServiceSettings
     @State private var model = HeatingFeatureModel()
     @State private var selectedRuntimeMode = HeatingRuntimeControlMode.schedule
     @State private var manualTargetCelsius = HeatingFeatureModel.defaultManualTargetCelsius
+    @State private var boostTargetCelsius = HeatingFeatureModel.defaultBoostTargetCelsius
+    @State private var boostDurationMinutes = HeatingFeatureModel.defaultBoostDurationMinutes
     @State private var isSyncingRuntimeModeControls = false
     @State private var suppressNextRuntimeModeSelectionChange = false
     @State private var pendingManualTargetSendTask: Task<Void, Never>?
@@ -174,6 +177,65 @@ struct HeatingView: View {
                 }
             }
 
+            Section("Boost") {
+                VStack(alignment: .leading, spacing: 10) {
+                    LabeledContent("Target") {
+                        Text(temperatureLabel(for: boostTargetCelsius))
+                            .monospacedDigit()
+                    }
+
+                    Stepper(
+                        value: $boostTargetCelsius,
+                        in: 5...30,
+                        step: 0.5
+                    ) {
+                        Text("Adjust boost target")
+                    }
+                    .disabled(boostControlsDisabled)
+
+                    LabeledContent("Duration") {
+                        Text(boostDurationLabel)
+                            .monospacedDigit()
+                    }
+
+                    Stepper(
+                        value: $boostDurationMinutes,
+                        in: Self.boostDurationStepMinutes...240,
+                        step: Self.boostDurationStepMinutes
+                    ) {
+                        Text("Adjust boost duration")
+                    }
+                    .disabled(boostControlsDisabled)
+
+                    Button(model.isBoostActive ? "Cancel boost" : "Boost heating") {
+                        Task { @MainActor in
+                            if model.isBoostActive {
+                                await cancelBoost()
+                            } else {
+                                await startBoost()
+                            }
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(boostButtonDisabled)
+
+                    if model.isBoostActive {
+                        TimelineView(.periodic(from: .now, by: 1)) { context in
+                            if let expiry = model.activeBoostExpiresAt {
+                                LabeledContent("Remaining") {
+                                    Text(HeatingFeatureModel.remainingTimeText(until: expiry, now: context.date))
+                                        .monospacedDigit()
+                                }
+                            }
+                        }
+
+                        Text("Cancel boost ends the active boost and restores the saved runtime mode.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
             Section("Schedule") {
                 if let schedule = model.schedule {
                     ForEach(Array(schedule.activeSlots.enumerated()), id: \.offset) { index, slot in
@@ -289,6 +351,9 @@ struct HeatingView: View {
             selectedRuntimeMode = syncedSelection
         }
         manualTargetCelsius = model.effectiveManualTargetCelsius
+        if let activeBoostTargetCelsius = model.activeBoostTargetCelsius {
+            boostTargetCelsius = activeBoostTargetCelsius
+        }
         isSyncingRuntimeModeControls = false
     }
 
@@ -341,6 +406,57 @@ struct HeatingView: View {
         }
 
         return abs(model.effectiveManualTargetCelsius - manualTargetCelsius) >= 0.05
+    }
+
+    private var boostControlsDisabled: Bool {
+        !model.canControlRuntimeMode || model.isChangingRuntimeMode || model.isBoostActive
+    }
+
+    private var boostButtonDisabled: Bool {
+        !model.canControlRuntimeMode || model.isChangingRuntimeMode
+    }
+
+    private var boostDurationLabel: String {
+        if boostDurationMinutes == 60 {
+            return "60 min"
+        }
+
+        return "\(boostDurationMinutes) min"
+    }
+
+    private func startBoost() async {
+        do {
+            try await model.setRuntimeModeBoost(
+                targetCelsius: boostTargetCelsius,
+                durationMinutes: boostDurationMinutes
+            )
+            if model.isBoostActive, let expiry = model.activeBoostExpiresAt {
+                let remainingSeconds = max(0, Int(expiry.timeIntervalSince(.now).rounded(.up)))
+                let roundedMinutes = max(
+                    Self.boostDurationStepMinutes,
+                    ((remainingSeconds + 59) / 60)
+                )
+                boostDurationMinutes = roundedMinutes
+            }
+        } catch let error as HeatingFeatureModelError {
+            model.alertMessage = HeatingFeatureModel.message(for: error)
+            syncRuntimeModeControls()
+        } catch {
+            model.alertMessage = error.localizedDescription
+            syncRuntimeModeControls()
+        }
+    }
+
+    private func cancelBoost() async {
+        do {
+            try await model.cancelRuntimeModeBoost()
+        } catch let error as HeatingFeatureModelError {
+            model.alertMessage = HeatingFeatureModel.message(for: error)
+            syncRuntimeModeControls()
+        } catch {
+            model.alertMessage = error.localizedDescription
+            syncRuntimeModeControls()
+        }
     }
 
     private func temperatureLabel(for temperature: Double) -> String {

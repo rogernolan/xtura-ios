@@ -13,7 +13,7 @@ The heating service is the source of truth.
 - edits are only allowed when the service URL is configured and the service is reachable
 - the app saves by converting the edited linked schedule back into a full server document and sending it with the last seen `revision`
 - there is no offline editable local fallback
-- runtime mode is also server-backed, with the app reading `GET /v1/heating/mode` and driving `schedule`, `manual`, or `off` through explicit mode endpoints
+- runtime mode is also server-backed, with the app reading `GET /v1/heating/mode` and driving `schedule`, `manual`, `off`, and `boost` through explicit mode endpoints
 
 ## In-App Projection
 
@@ -181,6 +181,9 @@ Export:
 - `HeatingFeatureModel` is the app-side coordinator for fetch, save, runtime mode reads, and not-configured/unavailable/unsupported states.
 - the Heating tab presents runtime mode as a three-way control: `schedule`, `manual`, `off`
 - manual mode uses `POST /v1/heating/mode/manual` with `target_celsius`; the app currently defaults to `19.0` when the server has no prior manual target
+- boost mode uses `POST /v1/heating/mode/boost` with `target_celsius` and `duration_minutes`; the app currently defaults to `21.0C` for `60` minutes
+- while boost is active, the app shows the remaining countdown and disables the local boost controls
+- boost cancellation now uses `POST /v1/heating/mode/boost/cancel`, which returns the restored steady runtime mode
 - Unsupported server shapes are surfaced explicitly instead of guessed.
   - JonesControl currently supports exactly one enabled program covering all seven days.
 - UI formatting helpers live in `HeatingView` and `HeatingSlotEditorView`; do not scrape display strings for integration.
