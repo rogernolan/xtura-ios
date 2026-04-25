@@ -6,7 +6,7 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Heating Service") {
+                Section("Automation Service") {
                     TextField(HeatingServiceSettings.placeholder, text: $settings.baseURLText)
                         .textInputAutocapitalization(.never)
                         .keyboardType(.URL)
@@ -27,7 +27,7 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    Text("JonesControl uses this address for the heating schedule and mode APIs. A typical value looks like `\(HeatingServiceSettings.defaultBaseURL)`.")
+                    Text("JonesControl uses this address for heating and lighting APIs. A typical value looks like `\(HeatingServiceSettings.defaultBaseURL)`.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
