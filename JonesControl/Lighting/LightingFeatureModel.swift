@@ -60,7 +60,7 @@ final class LightingFeatureModel {
         minimumFlashCount...maximumFlashCount
     }
 
-    static func message(for error: LightingFeatureModelError) -> String {
+    nonisolated static func message(for error: LightingFeatureModelError) -> String {
         switch error {
         case .notConfigured:
             return "Set the service URL in Settings before flashing external lights."
