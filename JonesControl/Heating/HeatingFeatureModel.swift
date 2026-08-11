@@ -4,9 +4,9 @@ import Observation
 @MainActor
 @Observable
 final class HeatingFeatureModel {
-    static let defaultManualTargetCelsius = 19.0
-    static let defaultBoostTargetCelsius = 21.0
-    static let defaultBoostDurationMinutes = 60
+    nonisolated static let defaultManualTargetCelsius = 19.0
+    nonisolated static let defaultBoostTargetCelsius = 21.0
+    nonisolated static let defaultBoostDurationMinutes = 60
 
     enum ServiceState: Equatable {
         case loading

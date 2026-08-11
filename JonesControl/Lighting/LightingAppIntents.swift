@@ -37,6 +37,16 @@ struct JonesControlShortcuts: AppShortcutsProvider {
             shortTitle: "Flash Lights",
             systemImageName: "lightbulb.2"
         )
+        AppShortcut(
+            intent: BoostJonesHeatingIntent(),
+            phrases: [
+                "Boost the \(.applicationName) heating",
+                "Boost \(.applicationName) heating",
+                "Turn on \(.applicationName) heating boost"
+            ],
+            shortTitle: "Boost Heating",
+            systemImageName: "heat.waves"
+        )
     }
 }
 
