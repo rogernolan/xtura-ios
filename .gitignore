@@ -1,5 +1,6 @@
 # macOS
 .DS_Store
+.worktrees/
 
 # Xcode user data
 *.xcuserstate
