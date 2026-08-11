@@ -36,10 +36,10 @@ targets; export maps each stored range directly to one server period.
 
 ## User interface
 
-The Schedule section lists all loaded ranges, with no fixed limit. It includes
-a `New slot` control.
+The Schedule section lists all loaded ranges, with no fixed limit. Each range
+editor includes an `Add slot after` control.
 
-New slot operates on a selected range: it splits that range at a valid
+Adding a slot operates on the range being edited: it splits that range at a valid
 15-minute-aligned midpoint and adds a second range. The newly created range is
 initially Off; the retained first range preserves its prior state. If a range
 cannot be split into two minimum-duration ranges, the control is unavailable.
