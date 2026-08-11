@@ -1,14 +1,13 @@
 import Foundation
 
 struct HeatingSchedule: Equatable, Sendable {
-    static let visibleSlotCount = 4
     static let minimumSlotDurationMinutes = 15
     static let minutesInDay = 24 * 60
 
     var visibleSlots: [HeatingScheduleVisibleSlot]
 
     init?(visibleSlots: [HeatingScheduleVisibleSlot]) {
-        guard visibleSlots.count == Self.visibleSlotCount else {
+        guard !visibleSlots.isEmpty else {
             return nil
         }
 
@@ -27,7 +26,7 @@ struct HeatingSchedule: Equatable, Sendable {
     }
 
     init?(activeSlots: [HeatingScheduleSlot]) {
-        guard activeSlots.count == Self.visibleSlotCount else {
+        guard !activeSlots.isEmpty else {
             return nil
         }
 
@@ -114,6 +113,61 @@ struct HeatingSchedule: Equatable, Sendable {
             mode: mode,
             targetTemperatureCelsius: targetTemperatureCelsius
         )
+
+        return Self.makeValidatedSchedule(from: slots.map(HeatingScheduleVisibleSlot.active))
+    }
+
+    func canAddOffSlot(after index: Int) -> Bool {
+        if case .success = addingOffSlot(after: index) {
+            return true
+        }
+        return false
+    }
+
+    func addingOffSlot(after index: Int) -> Result<HeatingSchedule, HeatingScheduleUpdateError> {
+        guard activeSlots.indices.contains(index) else {
+            return .failure(.slotIndexOutOfRange)
+        }
+
+        var slots = activeSlots
+        let slot = slots[index]
+        let halfDuration = (slot.endMinuteOfDay - slot.startMinuteOfDay) / 2
+        let alignedHalfDuration = (halfDuration / Self.minimumSlotDurationMinutes) * Self.minimumSlotDurationMinutes
+        let splitMinute = slot.startMinuteOfDay + alignedHalfDuration
+
+        guard splitMinute - slot.startMinuteOfDay >= Self.minimumSlotDurationMinutes,
+              slot.endMinuteOfDay - splitMinute >= Self.minimumSlotDurationMinutes else {
+            return .failure(.slotCannotBeSplit)
+        }
+
+        slots[index] = Self.slotWithUpdatedEnd(slot, endMinuteOfDay: splitMinute)
+        slots.insert(
+            HeatingScheduleSlot(
+                startMinuteOfDay: splitMinute,
+                endMinuteOfDay: slot.endMinuteOfDay,
+                mode: .off
+            ),
+            at: index + 1
+        )
+
+        return Self.makeValidatedSchedule(from: slots.map(HeatingScheduleVisibleSlot.active))
+    }
+
+    func canDeleteSlot(at index: Int) -> Bool {
+        index > 0 && activeSlots.indices.contains(index)
+    }
+
+    func deletingSlot(at index: Int) -> Result<HeatingSchedule, HeatingScheduleUpdateError> {
+        guard activeSlots.indices.contains(index) else {
+            return .failure(.slotIndexOutOfRange)
+        }
+        guard index > 0 else {
+            return .failure(.cannotDeleteAnchorSlot)
+        }
+
+        var slots = activeSlots
+        let deletedSlot = slots.remove(at: index)
+        slots[index - 1] = Self.slotWithUpdatedEnd(slots[index - 1], endMinuteOfDay: deletedSlot.endMinuteOfDay)
 
         return Self.makeValidatedSchedule(from: slots.map(HeatingScheduleVisibleSlot.active))
     }
@@ -337,68 +391,13 @@ struct HeatingSchedule: Equatable, Sendable {
             throw HeatingScheduleExportValidationError(errors: errors)
         }
 
-        let slots = activeSlots.sorted { lhs, rhs in
-            if lhs.startMinuteOfDay == rhs.startMinuteOfDay {
-                return lhs.endMinuteOfDay < rhs.endMinuteOfDay
-            }
-
-            return lhs.startMinuteOfDay < rhs.startMinuteOfDay
-        }
-
-        return Self.makeExportPeriods(from: slots)
-    }
-
-    private static func makeExportPeriods(from slots: [HeatingScheduleSlot]) -> [HeatingScheduleExportPeriod] {
-        let boundaries = Array(
-            Set(
-                [0, Self.minutesInDay]
-                + slots.flatMap { [$0.startMinuteOfDay, $0.endMinuteOfDay] }
-            )
-        )
-        .sorted()
-
-        var periods: [HeatingScheduleExportPeriod] = []
-        var lastState: HeatingScheduleExportState?
-
-        for (start, end) in zip(boundaries, boundaries.dropFirst()) {
-            guard end > start else {
-                continue
-            }
-
-            let midpoint = start + ((end - start) / 2)
-            let state = Self.state(at: midpoint, in: slots)
-
-            if state != lastState {
-                periods.append(
-                    HeatingScheduleExportPeriod(
-                        startMinuteOfDay: start,
-                        mode: state.mode,
-                        targetTemperatureCelsius: state.targetTemperatureCelsius
-                    )
-                )
-                lastState = state
-            }
-        }
-
-        if periods.isEmpty {
-            periods.append(
-                HeatingScheduleExportPeriod(
-                    startMinuteOfDay: 0,
-                    mode: .off,
-                    targetTemperatureCelsius: nil
-                )
+        return activeSlots.map { slot in
+            HeatingScheduleExportPeriod(
+                startMinuteOfDay: slot.startMinuteOfDay,
+                mode: slot.mode,
+                targetTemperatureCelsius: slot.targetTemperatureCelsius
             )
         }
-
-        return periods
-    }
-
-    private static func state(at minuteOfDay: Int, in slots: [HeatingScheduleSlot]) -> HeatingScheduleExportState {
-        guard let slot = slots.first(where: { $0.startMinuteOfDay <= minuteOfDay && minuteOfDay < $0.endMinuteOfDay }) else {
-            return .off
-        }
-
-        return slot.effectiveState
     }
 }
 
@@ -524,6 +523,8 @@ enum HeatingScheduleValidationError: Error, Equatable, Sendable {
 enum HeatingScheduleUpdateError: Error, Equatable, Sendable {
     case slotIndexOutOfRange
     case slotCountInvalid
+    case slotCannotBeSplit
+    case cannotDeleteAnchorSlot
     case validationErrors([HeatingScheduleValidationError])
 }
 
@@ -613,8 +614,7 @@ extension HeatingSchedule {
             )
         }
 
-        let paddedSlots = try Self.paddingToVisibleSlotCount(importedSlots)
-        guard let schedule = HeatingSchedule(activeSlots: paddedSlots) else {
+        guard let schedule = HeatingSchedule(activeSlots: importedSlots) else {
             throw HeatingScheduleMappingError.incompatibleShape(periodCount: importedSlots.count)
         }
 
@@ -651,50 +651,6 @@ extension HeatingSchedule {
             ],
             revision: revision
         )
-    }
-
-    private static func paddingToVisibleSlotCount(
-        _ slots: [HeatingScheduleSlot]
-    ) throws -> [HeatingScheduleSlot] {
-        guard slots.count <= visibleSlotCount else {
-            throw HeatingScheduleMappingError.incompatibleShape(periodCount: slots.count)
-        }
-
-        var paddedSlots = slots
-        while paddedSlots.count < visibleSlotCount {
-            guard let splitIndex = paddedSlots.indices
-                .filter({ paddedSlots[$0].endMinuteOfDay - paddedSlots[$0].startMinuteOfDay >= minimumSlotDurationMinutes * 2 })
-                .max(by: { lhs, rhs in
-                    let lhsDuration = paddedSlots[lhs].endMinuteOfDay - paddedSlots[lhs].startMinuteOfDay
-                    let rhsDuration = paddedSlots[rhs].endMinuteOfDay - paddedSlots[rhs].startMinuteOfDay
-                    if lhsDuration == rhsDuration {
-                        return lhs > rhs
-                    }
-                    return lhsDuration < rhsDuration
-                }) else {
-                throw HeatingScheduleMappingError.incompatibleShape(periodCount: slots.count)
-            }
-
-            let slot = paddedSlots[splitIndex]
-            let splitPoint = slot.startMinuteOfDay + minimumSlotDurationMinutes
-            paddedSlots[splitIndex] = HeatingScheduleSlot(
-                startMinuteOfDay: slot.startMinuteOfDay,
-                endMinuteOfDay: splitPoint,
-                mode: slot.mode,
-                targetTemperatureCelsius: slot.targetTemperatureCelsius
-            )
-            paddedSlots.insert(
-                HeatingScheduleSlot(
-                    startMinuteOfDay: splitPoint,
-                    endMinuteOfDay: slot.endMinuteOfDay,
-                    mode: slot.mode,
-                    targetTemperatureCelsius: slot.targetTemperatureCelsius
-                ),
-                at: splitIndex + 1
-            )
-        }
-
-        return paddedSlots
     }
 
     private static func minuteOfDay(from timeString: String) throws -> Int {

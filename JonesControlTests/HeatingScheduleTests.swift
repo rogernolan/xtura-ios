@@ -13,7 +13,7 @@ struct HeatingScheduleTests {
         #expect(offSlot.targetTemperatureCelsius == nil)
     }
 
-    @Test func visibleSchedulesRequireExactlyFourExplicitSlots() {
+    @Test func schedulesAcceptAnyPositiveNumberOfExplicitSlots() {
         let baseSlots = makeLinkedSlots()
         let visibleSlots = baseSlots.map(HeatingScheduleVisibleSlot.active)
         let placeholderSlots: [HeatingScheduleVisibleSlot] = [
@@ -22,17 +22,9 @@ struct HeatingScheduleTests {
             .empty,
             .active(baseSlots[3])
         ]
-        let tooManyActiveSlots = Array(repeating: HeatingScheduleSlot(
-            startMinuteOfDay: 60,
-            endMinuteOfDay: 120,
-            mode: .heat,
-            targetTemperatureCelsius: 20
-        ), count: 5)
-
-        #expect(HeatingSchedule(visibleSlots: Array(visibleSlots.prefix(3))) == nil)
+        #expect(HeatingSchedule(visibleSlots: []) == nil)
         #expect(HeatingSchedule(visibleSlots: placeholderSlots) == nil)
-        #expect(HeatingSchedule(activeSlots: Array(baseSlots.prefix(3))) == nil)
-        #expect(HeatingSchedule(activeSlots: tooManyActiveSlots) == nil)
+        #expect(HeatingSchedule(activeSlots: Array(baseSlots.prefix(3))) != nil)
         #expect(HeatingSchedule(visibleSlots: visibleSlots) != nil)
     }
 
@@ -84,6 +76,64 @@ struct HeatingScheduleTests {
         case .failure(let error):
             Issue.record("Expected validation error, got \(error).")
         }
+    }
+
+    @Test func addingOffSlotSplitsTheSelectedRangeAtItsMidpoint() {
+        let schedule = HeatingSchedule(activeSlots: [
+            HeatingScheduleSlot(startMinuteOfDay: 0, endMinuteOfDay: 6 * 60, mode: .off),
+            HeatingScheduleSlot(startMinuteOfDay: 6 * 60, endMinuteOfDay: 8 * 60, mode: .heat, targetTemperatureCelsius: 20),
+            HeatingScheduleSlot(startMinuteOfDay: 8 * 60, endMinuteOfDay: HeatingSchedule.minutesInDay, mode: .off)
+        ])!
+
+        switch schedule.addingOffSlot(after: 1) {
+        case .success(let updated):
+            #expect(updated.activeSlots[1] == HeatingScheduleSlot(
+                startMinuteOfDay: 6 * 60,
+                endMinuteOfDay: 7 * 60,
+                mode: .heat,
+                targetTemperatureCelsius: 20
+            ))
+            #expect(updated.activeSlots[2] == HeatingScheduleSlot(
+                startMinuteOfDay: 7 * 60,
+                endMinuteOfDay: 8 * 60,
+                mode: .off
+            ))
+        case .failure(let error):
+            Issue.record("Expected split to succeed, got \(error).")
+        }
+    }
+
+    @Test func addingOffSlotRejectsAMinimumDurationRange() {
+        let schedule = HeatingSchedule(activeSlots: [
+            HeatingScheduleSlot(startMinuteOfDay: 0, endMinuteOfDay: 15, mode: .off),
+            HeatingScheduleSlot(startMinuteOfDay: 15, endMinuteOfDay: HeatingSchedule.minutesInDay, mode: .off)
+        ])!
+
+        #expect(schedule.addingOffSlot(after: 0) == .failure(.slotCannotBeSplit))
+    }
+
+    @Test func deletingSlotExtendsThePrecedingRange() {
+        let schedule = HeatingSchedule(activeSlots: [
+            HeatingScheduleSlot(startMinuteOfDay: 0, endMinuteOfDay: 6 * 60, mode: .off),
+            HeatingScheduleSlot(startMinuteOfDay: 6 * 60, endMinuteOfDay: 8 * 60, mode: .heat, targetTemperatureCelsius: 20),
+            HeatingScheduleSlot(startMinuteOfDay: 8 * 60, endMinuteOfDay: HeatingSchedule.minutesInDay, mode: .off)
+        ])!
+
+        switch schedule.deletingSlot(at: 1) {
+        case .success(let updated):
+            #expect(updated.activeSlots == [
+                HeatingScheduleSlot(startMinuteOfDay: 0, endMinuteOfDay: 8 * 60, mode: .off),
+                HeatingScheduleSlot(startMinuteOfDay: 8 * 60, endMinuteOfDay: HeatingSchedule.minutesInDay, mode: .off)
+            ])
+        case .failure(let error):
+            Issue.record("Expected deletion to succeed, got \(error).")
+        }
+    }
+
+    @Test func deletingSlotRejectsTheMidnightAnchor() {
+        let schedule = makeSchedule()
+
+        #expect(schedule.deletingSlot(at: 0) == .failure(.cannotDeleteAnchorSlot))
     }
 
     @Test func editingBoundsReserveMinimumTimeForTheRemainingChain() {
@@ -433,6 +483,38 @@ struct HeatingScheduleTests {
                 mode: .off
             )
         ])
+    }
+
+    @Test func linkedDocumentMappingPreservesEveryLiveServerPeriod() throws {
+        let periods = [
+            HeatingSchedulePeriod(start: "00:00", mode: .off),
+            HeatingSchedulePeriod(start: "05:30", mode: .heat, targetCelsius: 6),
+            HeatingSchedulePeriod(start: "06:00", mode: .heat, targetCelsius: 5),
+            HeatingSchedulePeriod(start: "07:00", mode: .off),
+            HeatingSchedulePeriod(start: "09:00", mode: .off)
+        ]
+        let document = HeatingScheduleDocument(
+            timezone: "Europe/London",
+            programs: [
+                HeatingScheduleProgram(
+                    id: "everyday-default",
+                    enabled: true,
+                    days: HeatingScheduleWeekday.allDays,
+                    periods: periods
+                )
+            ],
+            revision: "live-revision"
+        )
+
+        let linked = try HeatingSchedule.linkedDocument(from: document)
+        let exported = try linked.schedule.serverDocument(
+            timezone: linked.timezone,
+            revision: linked.revision,
+            programID: linked.programID
+        )
+
+        #expect(linked.schedule.activeSlots.count == periods.count)
+        #expect(exported == document)
     }
 
     @Test func linkedScheduleExportsBackToOneEnabledAllDaysProgram() throws {

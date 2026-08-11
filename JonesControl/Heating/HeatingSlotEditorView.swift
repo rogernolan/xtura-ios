@@ -5,6 +5,7 @@ struct HeatingSlotEditorView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var draft: HeatingSlotEditorDraft
     @State private var alertMessage: String?
+    @State private var showsDeleteConfirmation = false
 
     private let slotIndex: Int
     private let schedule: HeatingSchedule
@@ -61,6 +62,22 @@ struct HeatingSlotEditorView: View {
                     }
                 }
             }
+
+            if schedule.canAddOffSlot(after: slotIndex) || schedule.canDeleteSlot(at: slotIndex) {
+                Section("Slot Actions") {
+                    if schedule.canAddOffSlot(after: slotIndex) {
+                        Button("Add slot after") {
+                            save(schedule.addingOffSlot(after: slotIndex))
+                        }
+                    }
+
+                    if schedule.canDeleteSlot(at: slotIndex) {
+                        Button("Delete slot", role: .destructive) {
+                            showsDeleteConfirmation = true
+                        }
+                    }
+                }
+            }
         }
         .navigationTitle("Slot \(slotIndex + 1)")
         .toolbar {
@@ -78,6 +95,13 @@ struct HeatingSlotEditorView: View {
             Button("OK", role: .cancel) { }
         } message: {
             Text(alertMessage ?? "")
+        }
+        .confirmationDialog("Delete this slot?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
+            Button("Delete slot", role: .destructive) {
+                save(schedule.deletingSlot(at: slotIndex))
+            }
+        } message: {
+            Text("The preceding slot will extend to this slot's end time.")
         }
         .onChange(of: draft.startMinuteOfDay) { _, newValue in
             draft.endMinuteOfDay = max(draft.endMinuteOfDay, newValue + Self.minimumDuration)
@@ -147,6 +171,10 @@ struct HeatingSlotEditorView: View {
             )
         }
 
+        save(updatedScheduleResult)
+    }
+
+    private func save(_ updatedScheduleResult: Result<HeatingSchedule, HeatingScheduleUpdateError>) {
         switch updatedScheduleResult {
         case .success(let updatedSchedule):
             Task { @MainActor in
@@ -211,6 +239,10 @@ struct HeatingSlotEditorView: View {
             return "That slot no longer exists."
         case .slotCountInvalid:
             return "The schedule is missing slots."
+        case .slotCannotBeSplit:
+            return "This slot is too short to split."
+        case .cannotDeleteAnchorSlot:
+            return "The midnight slot cannot be deleted."
         case .validationErrors(let errors):
             return errors.map { message(for: $0) }.joined(separator: "\n")
         }
