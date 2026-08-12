@@ -7,12 +7,12 @@ struct HeatingServiceSettingsTests {
     @Test func loadsPersistedBaseURL() {
         let userDefaults = UserDefaults(suiteName: #function)!
         userDefaults.removePersistentDomain(forName: #function)
-        userDefaults.set("http://jones-pi.taile19bc2.ts.net:8080", forKey: HeatingServiceSettings.baseURLKey)
+        userDefaults.set("http://jones-pi.taile19bc2.ts.net:8443", forKey: HeatingServiceSettings.baseURLKey)
 
         let settings = HeatingServiceSettings(userDefaults: userDefaults)
 
-        #expect(settings.baseURLText == "http://jones-pi.taile19bc2.ts.net:8080")
-        #expect(settings.configuredBaseURL?.absoluteString == "http://jones-pi.taile19bc2.ts.net:8080")
+        #expect(settings.baseURLText == "http://jones-pi.taile19bc2.ts.net:8443")
+        #expect(settings.configuredBaseURL?.absoluteString == "http://jones-pi.taile19bc2.ts.net:8443")
     }
 
     @Test func defaultsToJonesPiBaseURLWhenUnset() {
@@ -21,8 +21,19 @@ struct HeatingServiceSettingsTests {
 
         let settings = HeatingServiceSettings(userDefaults: userDefaults)
 
-        #expect(settings.baseURLText == HeatingServiceSettings.defaultBaseURL)
-        #expect(settings.configuredBaseURL?.absoluteString == HeatingServiceSettings.defaultBaseURL)
+        #expect(settings.baseURLText == "http://jones-pi.taile19bc2.ts.net")
+        #expect(settings.configuredBaseURL?.absoluteString == "http://jones-pi.taile19bc2.ts.net")
+    }
+
+    @Test func migratesThePreviousJonesPiPortToTheLiveServiceURL() {
+        let userDefaults = UserDefaults(suiteName: #function)!
+        userDefaults.removePersistentDomain(forName: #function)
+        userDefaults.set("http://jones-pi.taile19bc2.ts.net:8080", forKey: HeatingServiceSettings.baseURLKey)
+
+        let settings = HeatingServiceSettings(userDefaults: userDefaults)
+
+        #expect(settings.baseURLText == "http://jones-pi.taile19bc2.ts.net")
+        #expect(settings.configuredBaseURL?.absoluteString == "http://jones-pi.taile19bc2.ts.net")
     }
 
     @Test func persistsBaseURLChanges() {

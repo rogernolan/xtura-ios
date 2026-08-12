@@ -368,7 +368,7 @@ final class HeatingFeatureModel {
         case .heatPeriodMissingTarget(let programID, let start):
             return "Program \(programID) has a heat period at \(start) without a target temperature."
         case .incompatibleShape(let periodCount):
-            return "The server returned \(periodCount) periods, which does not fit the linked four-slot editor."
+            return "The server returned an invalid \(periodCount)-period schedule."
         case .invalidTime(let time):
             return "The server returned an invalid time value: \(time)."
         case .exportFailed(let exportValidationError):

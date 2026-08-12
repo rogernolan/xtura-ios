@@ -597,24 +597,6 @@ struct HeatingScheduleTests {
             ],
             revision: "rev"
         )
-        let incompatibleShape = HeatingScheduleDocument(
-            timezone: "Europe/London",
-            programs: [
-                HeatingScheduleProgram(
-                    id: "everyday-default",
-                    enabled: true,
-                    days: HeatingScheduleWeekday.allDays,
-                    periods: [
-                        HeatingSchedulePeriod(start: "00:00", mode: .off),
-                        HeatingSchedulePeriod(start: "00:15", mode: .heat, targetCelsius: 19),
-                        HeatingSchedulePeriod(start: "00:30", mode: .off),
-                        HeatingSchedulePeriod(start: "00:45", mode: .heat, targetCelsius: 20),
-                        HeatingSchedulePeriod(start: "01:00", mode: .off)
-                    ]
-                )
-            ],
-            revision: "rev"
-        )
         let missingHeatTarget = HeatingScheduleDocument(
             timezone: "Europe/London",
             programs: [
@@ -641,10 +623,6 @@ struct HeatingScheduleTests {
             enabled: true
         )) {
             try HeatingSchedule.linkedDocument(from: missingAllDays)
-        }
-
-        #expect(throws: HeatingScheduleMappingError.incompatibleShape(periodCount: 5)) {
-            try HeatingSchedule.linkedDocument(from: incompatibleShape)
         }
 
         #expect(throws: HeatingScheduleMappingError.heatPeriodMissingTarget(

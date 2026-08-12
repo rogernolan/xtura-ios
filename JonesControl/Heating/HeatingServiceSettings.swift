@@ -5,7 +5,8 @@ import Observation
 @Observable
 final class HeatingServiceSettings {
     static let baseURLKey = "heatingServiceBaseURL"
-    static let defaultBaseURL = "http://jones-pi.taile19bc2.ts.net:8080"
+    static let defaultBaseURL = "http://jones-pi.taile19bc2.ts.net"
+    private static let previousDefaultBaseURL = "http://jones-pi.taile19bc2.ts.net:8080"
     static let placeholder = defaultBaseURL
 
     var baseURLText: String {
@@ -19,7 +20,10 @@ final class HeatingServiceSettings {
 
     init(userDefaults: UserDefaults = .standard) {
         self.userDefaults = userDefaults
-        self.baseURLText = userDefaults.string(forKey: Self.baseURLKey) ?? Self.defaultBaseURL
+        let persistedBaseURL = userDefaults.string(forKey: Self.baseURLKey)
+        self.baseURLText = persistedBaseURL == Self.previousDefaultBaseURL
+            ? Self.defaultBaseURL
+            : persistedBaseURL ?? Self.defaultBaseURL
     }
 
     var trimmedBaseURLText: String {
