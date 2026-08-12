@@ -57,7 +57,7 @@ struct HeatingFeatureModelTests {
         #expect(model.serviceState == .ready)
         #expect(model.linkedDocument?.timezone == "Europe/London")
         #expect(model.linkedDocument?.revision == "rev-1")
-        #expect(model.schedule?.activeSlots.count == 4)
+        #expect(model.schedule?.activeSlots.count == 3)
         #expect(model.runtimeModeText == "Manual 19°C")
     }
 
@@ -237,7 +237,24 @@ struct HeatingFeatureModelTests {
 
         #expect(service.saveHeatingScheduleCallCount == 1)
         #expect(model.linkedDocument?.revision == "rev-2")
-        #expect(model.schedule == updatedSchedule)
+        #expect(model.schedule?.activeSlots == [
+            HeatingScheduleSlot(
+                startMinuteOfDay: 0,
+                endMinuteOfDay: 5 * 60 + 30,
+                mode: .off
+            ),
+            HeatingScheduleSlot(
+                startMinuteOfDay: 5 * 60 + 30,
+                endMinuteOfDay: 8 * 60,
+                mode: .heat,
+                targetTemperatureCelsius: 21
+            ),
+            HeatingScheduleSlot(
+                startMinuteOfDay: 8 * 60,
+                endMinuteOfDay: HeatingSchedule.minutesInDay,
+                mode: .off
+            )
+        ])
         #expect(model.serviceState == .ready)
     }
 

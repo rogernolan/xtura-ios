@@ -337,7 +337,7 @@ struct HeatingScheduleTests {
         ])
     }
 
-    @Test func exportDerivesOptionalLeadingAndTrailingOffPeriodsFromVisibleChain() throws {
+    @Test func exportPreservesEveryExplicitSlot() throws {
         let visibleSlots: [HeatingScheduleSlot] = [
             HeatingScheduleSlot(
                 startMinuteOfDay: 6 * 60,
@@ -370,12 +370,10 @@ struct HeatingScheduleTests {
         }
 
         #expect(try schedule.exportedPeriods() == [
-            HeatingScheduleExportPeriod(startMinuteOfDay: 0, mode: .off),
             HeatingScheduleExportPeriod(startMinuteOfDay: 6 * 60, mode: .heat, targetTemperatureCelsius: 21),
             HeatingScheduleExportPeriod(startMinuteOfDay: 8 * 60, mode: .off),
             HeatingScheduleExportPeriod(startMinuteOfDay: 12 * 60, mode: .heat, targetTemperatureCelsius: 20),
-            HeatingScheduleExportPeriod(startMinuteOfDay: 17 * 60, mode: .heat, targetTemperatureCelsius: 19),
-            HeatingScheduleExportPeriod(startMinuteOfDay: 22 * 60, mode: .off)
+            HeatingScheduleExportPeriod(startMinuteOfDay: 17 * 60, mode: .heat, targetTemperatureCelsius: 19)
         ])
     }
 
@@ -474,11 +472,6 @@ struct HeatingScheduleTests {
             ),
             HeatingScheduleSlot(
                 startMinuteOfDay: 8 * 60,
-                endMinuteOfDay: 8 * 60 + 15,
-                mode: .off
-            ),
-            HeatingScheduleSlot(
-                startMinuteOfDay: 8 * 60 + 15,
                 endMinuteOfDay: HeatingSchedule.minutesInDay,
                 mode: .off
             )
@@ -558,7 +551,8 @@ struct HeatingScheduleTests {
                     periods: [
                         HeatingSchedulePeriod(start: "00:00", mode: .off),
                         HeatingSchedulePeriod(start: "05:30", mode: .heat, targetCelsius: 20),
-                        HeatingSchedulePeriod(start: "08:00", mode: .off)
+                        HeatingSchedulePeriod(start: "08:00", mode: .off),
+                        HeatingSchedulePeriod(start: "08:15", mode: .off)
                     ]
                 )
             ],
